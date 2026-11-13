@@ -947,3 +947,5 @@
 #mmb-overlay[data-spotify-sdk][data-engine="spotify"] .mmb-stylus { height: 100px; top: -40px; }
 #mmb-overlay[data-spotify-sdk][data-engine="spotify"] .mmb-music-content { gap: 18px; padding: 76px 32px 24px; }
 .mmb-set-warn { color: #e0a24a; opacity: 1; }
+.mmb-set-keystatus { margin-top: -4px; }
+.mmb-set-keystatus.ok { color: #6fbf73; opacity: 1; }

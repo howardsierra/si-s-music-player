@@ -2582,8 +2582,10 @@ function mountSettings() {
             </div>
             <div class="mmb-set-row mmb-set-theme-row">
               <label for="mmb-set-dkey">API key</label>
-              <input type="password" id="mmb-set-dkey" class="text_pole" autocomplete="off" placeholder="not needed for local servers">
+              <input type="password" id="mmb-set-dkey" class="text_pole" autocomplete="off" placeholder="paste your key here">
+              <div id="mmb-set-dkey-show" class="menu_button fa-solid fa-eye" role="button" tabindex="0" title="Show / hide the key"></div>
             </div>
+            <small id="mmb-set-dkey-status" class="mmb-set-help mmb-set-keystatus"></small>
             <div class="mmb-set-row mmb-set-theme-row">
               <label for="mmb-set-dmodel">Model</label>
               <input type="text" id="mmb-set-dmodel" class="text_pole" autocomplete="off" list="mmb-set-dmodels">
@@ -2637,7 +2639,10 @@ function mountSettings() {
   $('mmb-set-every').addEventListener('change', (e) => { s.ai.sceneEvery = clamp(Math.round(Number(e.target.value) || 0), 0, 50); e.target.value = s.ai.sceneEvery; save(); });
   $('mmb-set-scenetoast').addEventListener('change', (e) => { s.ai.sceneToast = e.target.checked; save(); });
   $('mmb-set-previews').addEventListener('change', (e) => { s.ai.previews = e.target.checked; save(); });
-  $('mmb-set-ytkey').addEventListener('change', (e) => { s.ai.youtubeKey = e.target.value.trim(); save(); });
+  const commitYt = (e) => { s.ai.youtubeKey = e.target.value.trim(); save(); };
+  $('mmb-set-ytkey').addEventListener('input', commitYt);
+  $('mmb-set-ytkey').addEventListener('change', commitYt);
+  $('mmb-set-spid').addEventListener('input', (e) => { s.spotify.clientId = e.target.value.trim(); save(); });
   $('mmb-set-spid').addEventListener('change', (e) => {
     s.spotify.clientId = e.target.value.trim();
     save(); state.spotifySdkOff = false; resetSpotifyEngine(); syncSettingsUI();
@@ -2676,11 +2681,26 @@ function mountSettings() {
     Object.assign(s.ai.direct, { preset: e.target.value, format: pr.format, baseUrl: pr.baseUrl || s.ai.direct.baseUrl, model: pr.model });
     save(); syncSettingsUI();
   });
-  $('mmb-set-dformat').addEventListener('change', (e) => { s.ai.direct.format = e.target.value; save(); });
-  $('mmb-set-durl').addEventListener('change', (e) => { s.ai.direct.baseUrl = e.target.value.trim(); save(); });
-  $('mmb-set-dkey').addEventListener('change', (e) => { s.ai.direct.apiKey = e.target.value.trim(); save(); });
-  $('mmb-set-dmodel').addEventListener('change', (e) => { s.ai.direct.model = e.target.value.trim(); save(); });
+  // Save as you type (not only when the box loses focus): pastes, password managers and phone autofill
+  // often never fire "change", and then the key would just sit in the box unused.
+  const commitDirect = () => {
+    s.ai.direct.format = $('mmb-set-dformat').value;
+    s.ai.direct.baseUrl = $('mmb-set-durl').value.trim();
+    s.ai.direct.apiKey = $('mmb-set-dkey').value.trim();
+    s.ai.direct.model = $('mmb-set-dmodel').value.trim();
+    save();
+    renderKeyStatus();
+  };
+  ['mmb-set-dformat', 'mmb-set-durl', 'mmb-set-dkey', 'mmb-set-dmodel'].forEach((id) => {
+    $(id).addEventListener('input', commitDirect);
+    $(id).addEventListener('change', commitDirect);
+  });
+  $('mmb-set-dkey-show').addEventListener('click', () => {
+    const k = $('mmb-set-dkey');
+    k.type = k.type === 'password' ? 'text' : 'password';
+  });
   $('mmb-set-dload').addEventListener('click', async () => {
+    commitDirect();
     const cfg = s.ai.direct;
     try {
       const { url, init } = buildModelsRequest(cfg);
@@ -2698,6 +2718,7 @@ function mountSettings() {
     const btn = ev.currentTarget;
     if (btn.disabled) return;
     btn.disabled = true;
+    if (s.ai.provider === 'direct') commitDirect(); // use exactly what's in the boxes right now
     out.textContent = 'Asking…';
     const t0 = Date.now();
     try {
@@ -2777,6 +2798,19 @@ function mountSettings() {
   syncSettingsUI();
 }
 
+/** "Key saved (…c123)" under the API key box, so it's clear the key is stored and will be used. */
+function renderKeyStatus() {
+  const el = document.getElementById('mmb-set-dkey-status');
+  if (!el) return;
+  const d = settings().ai.direct;
+  const key = String(d.apiKey || '');
+  const local = /localhost|127\.0\.0\.1/.test(d.baseUrl || '');
+  el.textContent = key
+    ? `✓ Key saved (ends in …${key.slice(-4)}). Click "Test the AI model" to check it works.`
+    : (local ? 'No key needed for a local server.' : 'No key saved yet.');
+  el.classList.toggle('ok', !!key);
+}
+
 function syncSettingsUI() {
   const s = settings();
   const $ = (id) => document.getElementById(id);
@@ -2797,10 +2831,10 @@ function syncSettingsUI() {
   $('mmb-set-every').value = s.ai.sceneEvery;
   $('mmb-set-scenetoast').checked = !!s.ai.sceneToast;
   $('mmb-set-previews').checked = !!s.ai.previews;
-  $('mmb-set-ytkey').value = s.ai.youtubeKey || '';
+  if (document.activeElement !== $('mmb-set-ytkey')) $('mmb-set-ytkey').value = s.ai.youtubeKey || '';
   const redirect = SP.redirectUri();
   const problem = SP.redirectProblem(redirect);
-  $('mmb-set-spid').value = s.spotify.clientId || '';
+  if (document.activeElement !== $('mmb-set-spid')) $('mmb-set-spid').value = s.spotify.clientId || '';
   $('mmb-set-spredirect').value = redirect;
   $('mmb-set-spwarn').textContent = problem;
   $('mmb-set-spwarn').hidden = !problem;
@@ -2824,11 +2858,13 @@ function syncSettingsUI() {
   }
   const d = s.ai.direct;
   $('mmb-set-dpreset').value = DIRECT_PRESETS[d.preset] ? d.preset : 'custom';
+  const setVal = (id, v) => { const el = $(id); if (document.activeElement !== el) el.value = v; };
   $('mmb-set-dformat').value = d.format;
   $('mmb-set-dformat-row').hidden = d.preset !== 'custom';
-  $('mmb-set-durl').value = d.baseUrl || '';
-  $('mmb-set-dkey').value = d.apiKey || '';
-  $('mmb-set-dmodel').value = d.model || '';
+  setVal('mmb-set-durl', d.baseUrl || '');
+  setVal('mmb-set-dkey', d.apiKey || '');
+  setVal('mmb-set-dmodel', d.model || '');
+  renderKeyStatus();
 }
 
 function applyEnabled() {
