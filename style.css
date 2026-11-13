@@ -949,3 +949,7 @@
 .mmb-set-warn { color: #e0a24a; opacity: 1; }
 .mmb-set-keystatus { margin-top: -4px; }
 .mmb-set-keystatus.ok { color: #6fbf73; opacity: 1; }
+.mmb-set-pick { display: flex; flex-direction: column; gap: 6px; }
+.mmb-set-pick[hidden] { display: none; }
+.mmb-set-pick select { width: 100%; height: auto; min-height: 8em; }
+.mmb-set-pick input[hidden] { display: none; }

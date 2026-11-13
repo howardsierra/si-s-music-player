@@ -128,3 +128,28 @@ export function explainFetchError(err, cfg) {
   }
   return msg;
 }
+
+/** Fetch the model names a direct API offers, sorted. Throws a readable error. */
+export async function fetchModels(cfg, fetchFn = fetch) {
+  if (!trimSlash(cfg.baseUrl)) throw new Error('Set the API address first.');
+  const { url, init } = buildModelsRequest(cfg);
+  let res;
+  try { res = await fetchFn(url, init); } catch (e) { throw new Error(explainFetchError(e, cfg)); }
+  let json = null;
+  try { json = await res.json(); } catch (e) { /* not JSON */ }
+  if (!res.ok) {
+    const why = json && json.error ? (json.error.message || json.error) : res.statusText;
+    const hint = res.status === 401 || res.status === 403 ? ' Check the API key.' : '';
+    throw new Error(`${res.status} ${why || ''}`.trim() + hint);
+  }
+  const models = [...new Set(parseModels(cfg.format, json))].sort((a, b) => a.localeCompare(b));
+  if (!models.length) throw new Error('The API answered, but listed no models. Type the model name instead.');
+  return models;
+}
+
+/** Models matching every word of the filter ("claude haiku" finds "anthropic/claude-haiku-…"). */
+export function filterModels(models, query) {
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return models;
+  return models.filter((m) => { const k = m.toLowerCase(); return words.every((w) => k.indexOf(w) > -1); });
+}

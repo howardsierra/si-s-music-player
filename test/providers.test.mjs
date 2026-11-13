@@ -75,3 +75,17 @@ test('callLLM direct uses fetch', async () => {
     await assert.rejects(callLLM({}, { system: 'S', prompt: 'P' }, { provider: 'direct', direct: { format: 'openai', baseUrl: 'https://x', model: 'm' } }), /401 Invalid API key/);
   } finally { globalThis.fetch = realFetch; }
 });
+
+test('fetchModels sorts, dedupes and explains failures', async () => {
+  const { fetchModels, filterModels } = await import('../src/providers.js');
+  const ok = async () => ({ ok: true, json: async () => ({ data: [{ id: 'z-model' }, { id: 'a-model' }, { id: 'a-model' }] }) });
+  assert.deepEqual(await fetchModels({ format: 'openai', baseUrl: 'https://x/v1', apiKey: 'k' }, ok), ['a-model', 'z-model']);
+  const unauthorized = async () => ({ ok: false, status: 401, statusText: 'Unauthorized', json: async () => ({ error: { message: 'Incorrect API key provided' } }) });
+  await assert.rejects(fetchModels({ format: 'openai', baseUrl: 'https://x/v1', apiKey: 'bad' }, unauthorized), /401 Incorrect API key provided Check the API key/);
+  const cors = async () => { throw new TypeError('Failed to fetch'); };
+  await assert.rejects(fetchModels({ format: 'openai', baseUrl: 'https://x/v1' }, cors), /Connection Profile/);
+  const empty = async () => ({ ok: true, json: async () => ({ data: [] }) });
+  await assert.rejects(fetchModels({ format: 'openai', baseUrl: 'https://x/v1' }, empty), /listed no models/);
+  await assert.rejects(fetchModels({ format: 'openai', baseUrl: '' }, ok), /address/);
+  assert.deepEqual(filterModels(['anthropic/claude-haiku-5-5', 'openai/gpt-4o-mini', 'anthropic/claude-opus'], 'claude haiku'), ['anthropic/claude-haiku-5-5']);
+});

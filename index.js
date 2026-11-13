@@ -13,7 +13,7 @@ import * as AI from './src/ai.js';
 import { resolveAll } from './src/resolve.js';
 import { ENGINE_FACTORIES, createSpotifySdkEngine } from './src/engines.js';
 import * as SP from './src/spotify-auth.js';
-import { DIRECT_PRESETS, buildModelsRequest, parseModels, explainFetchError } from './src/providers.js';
+import { DIRECT_PRESETS, fetchModels, filterModels } from './src/providers.js';
 
 const MODULE = 'si-music-player';
 const LEGACY_MODULE = 'mors-music-box'; // settings are copied over from Mors's Music Box on first run
@@ -2588,9 +2588,15 @@ function mountSettings() {
             <small id="mmb-set-dkey-status" class="mmb-set-help mmb-set-keystatus"></small>
             <div class="mmb-set-row mmb-set-theme-row">
               <label for="mmb-set-dmodel">Model</label>
-              <input type="text" id="mmb-set-dmodel" class="text_pole" autocomplete="off" list="mmb-set-dmodels">
-              <datalist id="mmb-set-dmodels"></datalist>
-              <div id="mmb-set-dload" class="menu_button fa-solid fa-list" role="button" tabindex="0" title="Load the model list"></div>
+              <input type="text" id="mmb-set-dmodel" class="text_pole" autocomplete="off" spellcheck="false" placeholder="pick below, or type a name">
+            </div>
+            <div class="mmb-set-row">
+              <button type="button" class="mmbSetBtn" id="mmb-set-dload">Load models</button>
+              <small id="mmb-set-dmodels-status" class="mmb-set-help mmb-set-testout"></small>
+            </div>
+            <div id="mmb-set-dpick-box" class="mmb-set-pick" hidden>
+              <input type="search" id="mmb-set-dfilter" class="text_pole" autocomplete="off" placeholder="Filter models, e.g. claude haiku">
+              <select id="mmb-set-dpick" class="text_pole" size="8"></select>
             </div>
             <small class="mmb-set-help">Your browser calls the API itself, and the key is saved in plain text in your SillyTavern settings. Some APIs refuse calls from web pages; if yours does, use a Connection Profile.</small>
           </div>
@@ -2673,13 +2679,13 @@ function mountSettings() {
       out.textContent = `✗ ${err.message || err}`;
     }
   });
-  $('mmb-set-provider').addEventListener('change', (e) => { s.ai.provider = e.target.value; save(); syncSettingsUI(); });
+  $('mmb-set-provider').addEventListener('change', (e) => { s.ai.provider = e.target.value; save(); syncSettingsUI(); if (state.loadModelsSoon) state.loadModelsSoon(); });
   $('mmb-set-profile').addEventListener('change', (e) => { s.ai.profileId = e.target.value; save(); });
   $('mmb-set-profile-refresh').addEventListener('click', () => syncSettingsUI());
   $('mmb-set-dpreset').addEventListener('change', (e) => {
     const pr = DIRECT_PRESETS[e.target.value] || DIRECT_PRESETS.custom;
     Object.assign(s.ai.direct, { preset: e.target.value, format: pr.format, baseUrl: pr.baseUrl || s.ai.direct.baseUrl, model: pr.model });
-    save(); syncSettingsUI();
+    save(); state.clearModelList(); syncSettingsUI(); state.loadModelsSoon();
   });
   // Save as you type (not only when the box loses focus): pastes, password managers and phone autofill
   // often never fire "change", and then the key would just sit in the box unused.
@@ -2699,20 +2705,66 @@ function mountSettings() {
     const k = $('mmb-set-dkey');
     k.type = k.type === 'password' ? 'text' : 'password';
   });
-  $('mmb-set-dload').addEventListener('click', async () => {
+  // the model list: a real dropdown (with a filter for long lists like OpenRouter's), loaded on demand
+  // and automatically once the address and key are in
+  let modelList = [];
+  let modelListFor = '';
+  let modelLoadTimer = null;
+  const renderModelPick = () => {
+    const box = $('mmb-set-dpick-box');
+    box.hidden = !modelList.length;
+    if (!modelList.length) return;
+    const filter = $('mmb-set-dfilter');
+    filter.hidden = modelList.length < 12;
+    if (filter.hidden) filter.value = ''; // a short list shows everything
+    const shown = filterModels(modelList, filter.value).slice(0, 500);
+    const cur = s.ai.direct.model;
+    $('mmb-set-dpick').innerHTML = shown.length
+      ? shown.map((m) => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc(m)}</option>`).join('')
+      : '<option disabled>No models match the filter</option>';
+  };
+  const loadModels = async (auto) => {
     commitDirect();
     const cfg = s.ai.direct;
+    const key = `${cfg.format}|${cfg.baseUrl}|${cfg.apiKey}`;
+    if (auto && key === modelListFor) return;
+    const out = $('mmb-set-dmodels-status');
+    const btn = $('mmb-set-dload');
+    btn.disabled = true;
+    out.textContent = 'Loading models…';
     try {
-      const { url, init } = buildModelsRequest(cfg);
-      const res = await fetch(url, init);
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      const models = parseModels(cfg.format, await res.json());
-      $('mmb-set-dmodels').innerHTML = models.map((m) => `<option value="${esc(m)}">`).join('');
-      toast('success', `Found ${models.length} models. Click the Model box to pick one.`);
+      const fresh = await fetchModels(cfg);
+      if (key !== modelListFor) $('mmb-set-dfilter').value = ''; // a new list starts unfiltered
+      modelList = fresh;
+      modelListFor = key;
+      out.textContent = `✓ ${modelList.length} models. Pick one below.`;
+      renderModelPick();
     } catch (err) {
-      toast('error', `Couldn't load models: ${explainFetchError(err, cfg)}`);
-    }
+      modelList = [];
+      modelListFor = auto ? key : ''; // don't keep retrying the same failing setup on its own
+      renderModelPick();
+      out.textContent = `✗ Couldn't load models: ${err.message || err}`;
+    } finally { btn.disabled = false; }
+  };
+  const loadModelsSoon = () => {
+    clearTimeout(modelLoadTimer);
+    const d = s.ai.direct;
+    const local = /localhost|127\.0\.0\.1/.test(d.baseUrl || '');
+    const keyless = local || /openrouter\.ai/.test(d.baseUrl || ''); // these list models without a key
+    if (s.ai.provider !== 'direct' || !d.baseUrl || (!d.apiKey && !keyless)) return;
+    modelLoadTimer = setTimeout(() => loadModels(true), 900);
+  };
+  $('mmb-set-dload').addEventListener('click', () => loadModels(false));
+  $('mmb-set-dfilter').addEventListener('input', renderModelPick);
+  $('mmb-set-dpick').addEventListener('change', (e) => {
+    $('mmb-set-dmodel').value = e.target.value;
+    commitDirect();
+    $('mmb-set-dmodels-status').textContent = `✓ Using ${e.target.value}`;
   });
+  ['mmb-set-durl', 'mmb-set-dkey', 'mmb-set-dformat'].forEach((id) => $(id).addEventListener('input', loadModelsSoon));
+  state.loadModelsSoon = loadModelsSoon;
+  state.clearModelList = () => { modelList = []; modelListFor = ''; renderModelPick(); $('mmb-set-dmodels-status').textContent = ''; };
+  ['focusin', 'pointerenter'].forEach((ev) => $('mmb-set-direct-box').addEventListener(ev, () => { if (!modelList.length) loadModelsSoon(); }));
   $('mmb-set-aitest').addEventListener('click', async (ev) => {
     const out = $('mmb-set-aitest-out');
     const btn = ev.currentTarget;
