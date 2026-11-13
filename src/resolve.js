@@ -1,10 +1,11 @@
 /* Turn an AI song idea ("title — artist") into something playable.
+ * 0. the full song on Spotify, if the user connected Spotify
  * 1. YouTube full song, if the user saved a YouTube Data API key
  * 2. a 30-second preview from the iTunes Search API (free, no key)
  * Otherwise the suggestion stays as an idea with search links.
  */
 
-const norm = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9฀-๿]+/g, ' ').trim();
+const norm = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\u0E00-\u0E7F]+/g, ' ').trim();
 
 /** How well a search result matches what we asked for (0..2). */
 export function matchScore(want, got) {
@@ -67,8 +68,23 @@ async function fromYouTube(want, key) {
   return { url: `https://www.youtube.com/watch?v=${item.id.videoId}`, preview: false };
 }
 
+async function fromSpotify(want, search) {
+  const items = await search(want.title, want.artist);
+  let best = null, bestScore = -1;
+  (items || []).forEach((t) => {
+    const sc = matchScore(want, { title: t.name, artist: (t.artists || []).map((a) => a.name).join(' ') });
+    if (sc > bestScore) { best = t; bestScore = sc; }
+  });
+  if (!best || bestScore < 2) return null;
+  const imgs = (best.album && best.album.images) || [];
+  return { url: `https://open.spotify.com/track/${best.id}`, preview: false, art: imgs[0] && imgs[0].url };
+}
+
 /** @returns {Promise<object|null>} fields to merge into the suggestion, or null if nothing found */
 export async function resolveSong(want, opts = {}) {
+  if (opts.spotifySearch) {
+    try { const r = await fromSpotify(want, opts.spotifySearch); if (r) return r; } catch (e) { console.warn('[si-music] Spotify search', e); }
+  }
   if (opts.youtubeKey) {
     try { const r = await fromYouTube(want, opts.youtubeKey); if (r) return r; } catch (e) { console.warn('[si-music] YouTube search', e); }
   }

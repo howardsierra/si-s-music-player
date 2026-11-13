@@ -939,3 +939,11 @@
 .mmb-set-sub { display: flex; flex-direction: column; gap: 8px; padding-left: 10px; border-left: 2px solid rgba(127, 127, 127, .3); }
 .mmb-set-sub[hidden], .mmb-set-row[hidden] { display: none; }
 .mmb-set-testout { margin: 0; }
+/* Spotify through the Web Playback SDK has no visible player: keep the full record and handwriting */
+#mmb-overlay[data-spotify-sdk][data-engine="spotify"] .mmb-embed-spotify { display: none; }
+#mmb-overlay[data-spotify-sdk][data-engine="spotify"] .mmb-sign { display: block; }
+#mmb-overlay[data-spotify-sdk][data-engine="spotify"] .mmb-vinyl { width: 220px; height: 220px; }
+#mmb-overlay[data-spotify-sdk][data-engine="spotify"] .mmb-big-cover { width: 90px; height: 90px; }
+#mmb-overlay[data-spotify-sdk][data-engine="spotify"] .mmb-stylus { height: 100px; top: -40px; }
+#mmb-overlay[data-spotify-sdk][data-engine="spotify"] .mmb-music-content { gap: 18px; padding: 76px 32px 24px; }
+.mmb-set-warn { color: #e0a24a; opacity: 1; }

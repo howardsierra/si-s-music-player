@@ -8,6 +8,7 @@ This is a fork of **[Mors's Music Box](https://github.com/Mors1212/mors-music-bo
 
 * **Spotify, YouTube and SoundCloud:** paste a song, album or playlist link and it plays in the player through the official embed.
   * Spotify plays full songs if you're logged in to Spotify in the same browser. Otherwise it plays 30-second previews. This is Spotify's rule, not ours.
+  * **Spotify full songs (Premium):** connect your own free Spotify app and the browser becomes a Spotify device. Songs play in full with the player's own controls and volume, and AI picks are found on Spotify. **[Setup guide](SPOTIFY-SETUP.md)**.
   * Some YouTube videos (often official music videos) don't allow playing outside YouTube. They're skipped with a message. "Topic" or lyric uploads usually work.
 * **More link converters:** OneDrive (including `1drv.ms`), SharePoint, Box, GitLab, Hugging Face, Internet Archive and more Google Drive link styles, on top of Dropbox, GitHub and Drive. Links that can't play (Apple Music, Deezer, short `spotify.link` links…) are refused when you save, with the reason.
 * **Check links:** a button in the playlist editor that test-loads every link and shows its length.
@@ -122,6 +123,7 @@ Find these under **Extensions → Si's Music Player**.
 | 📥 / 📤 | Import a theme file / export the selected theme. |
 | 💀 | Delete the selected theme. |
 | **Reset Position** | Moves the floating button back to the corner. |
+| **Spotify full songs** | Your Spotify app's Client ID, the Redirect URI to paste into it, and Connect / Disconnect. See [SPOTIFY-SETUP.md](SPOTIFY-SETUP.md). |
 | **Crossfade** | Fades between two audio files. Streaming songs start after the previous one ends. |
 | **Mood music → Follow the story** | Off, Keywords (free), or AI reads the scene. |
 | **Change song as soon as the mood changes** | Off = the mood is used at the next song change. |
@@ -167,6 +169,7 @@ No build step: SillyTavern loads `index.js` (an ES module) and the files in `src
 * `src/mood.js`: mood tags and the keyword mood reader
 * `src/ai.js`: AI prompts and reading the AI's JSON answers
 * `src/providers.js`: which AI model the sidecar calls (Connection Profile or direct API)
+* `src/spotify-auth.js`: Spotify login (PKCE, no client secret) and Web API calls
 * `src/resolve.js`: turning AI picks into playable links
 * `src/engines.js`: Spotify, YouTube and SoundCloud players behind one interface
 

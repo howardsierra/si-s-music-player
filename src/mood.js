@@ -49,7 +49,7 @@ const LEXICON = {
   dark: ['blood', 'corpse', 'dead', 'death', 'kill', 'scream', 'horror', 'monster', 'demon', 'curse', 'rot', 'grave', 'nightmare', 'terror', 'sinister', 'dread', 'เลือด', 'ศพ', 'ผี', 'ฆ่า'],
 };
 
-const isThai = (s) => /[฀-๿]/.test(s);
+const isThai = (s) => /[\u0E00-\u0E7F]/.test(s);
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const PATTERNS = {};
 MOODS.forEach((m) => {

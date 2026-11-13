@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spotify login · Si's Music Player</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #121212; color: #eee; font: 16px/1.5 system-ui, sans-serif; text-align: center; padding: 24px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<p id="msg">Finishing Spotify login…</p>
+<script>
+  // Spotify sends the login result here. Pass it back to the player window, then close.
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var data = { type: 'si-music-spotify-callback', code: q.get('code'), state: q.get('state'), error: q.get('error') };
+    try { localStorage.setItem('si-music-spotify-callback', JSON.stringify(data)); } catch (e) { /* private mode */ }
+    try { if (window.opener) window.opener.postMessage(data, location.origin); } catch (e) { /* opener gone */ }
+    document.getElementById('msg').textContent = data.error
+      ? 'Spotify login was not completed (' + data.error + '). You can close this window.'
+      : 'Connected. You can close this window.';
+    setTimeout(function () { window.close(); }, 600);
+  })();
+</script>
+</body>
+</html>

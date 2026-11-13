@@ -11,7 +11,8 @@ import { detectSource, sourceLabel, titleFromUrl, searchLinks } from './src/sour
 import { MOODS, MOOD_EMOJI, normalizeMoods, detectMood, pickTrackForMood, tracksWithMood } from './src/mood.js';
 import * as AI from './src/ai.js';
 import { resolveAll } from './src/resolve.js';
-import { ENGINE_FACTORIES } from './src/engines.js';
+import { ENGINE_FACTORIES, createSpotifySdkEngine } from './src/engines.js';
+import * as SP from './src/spotify-auth.js';
 import { DIRECT_PRESETS, buildModelsRequest, parseModels, explainFetchError } from './src/providers.js';
 
 const MODULE = 'si-music-player';
@@ -89,6 +90,9 @@ const DEFAULTS = {
   mood: {
     mode: 'off', // off | keywords | ai
     switchNow: true, // change song as soon as the mood changes (else at the end of the current song)
+  },
+  spotify: {
+    clientId: '', // the person's own Spotify app (developer.spotify.com) -> full songs with Premium
   },
   ai: {
     enabled: false, // the AI sidecar uses the model connected in SillyTavern
@@ -838,18 +842,53 @@ function ensureAudio() {
   return audio;
 }
 
+/** Full Spotify songs: the person connected their own Spotify app, and the SDK works in this browser. */
+function spotifyFull() {
+  const id = settings().spotify.clientId;
+  return !!(id && !state.spotifySdkOff && SP.isConnected(id));
+}
+
+/** Drop the Spotify engine so the next song picks SDK or embed afresh (after connect / disconnect). */
+function resetSpotifyEngine() {
+  const e = embeds.spotify;
+  if (!e) return;
+  if (state.engine === 'spotify') { try { e.stop(); } catch (err) { /* ignore */ } }
+  if (e.destroy) { try { e.destroy(); } catch (err) { /* ignore */ } }
+  delete embeds.spotify;
+  const host = document.querySelector('#mmb-overlay .mmb-embed-spotify');
+  if (host) host.innerHTML = '';
+  renderPlaying();
+}
+
 function engineFor(kind) {
   if (!embeds[kind]) {
     mountOverlay();
     const host = document.querySelector(`#mmb-overlay .mmb-embed-${kind}`);
     const mine = (fn) => (...args) => { if (state.engine === kind) fn(...args); };
-    embeds[kind] = ENGINE_FACTORIES[kind](host, {
+    const hooks = {
       onPlay: mine(onStarted),
       onPause: mine(renderPlaying),
       onEnded: mine(() => next(true)),
       onTime: mine(onTick),
       onError: mine((reason) => onPlaybackError(reason)),
-    });
+    };
+    if (kind === 'spotify' && spotifyFull()) {
+      const clientId = settings().spotify.clientId;
+      hooks.onUnavailable = (reason) => {
+        // this browser can't run Spotify's player (most phones) or the account isn't Premium: use the embed
+        state.spotifySdkOff = true;
+        delete embeds.spotify;
+        toast('info', `${reason} Using Spotify's embedded player instead.`);
+        if (state.engine === 'spotify') setTimeout(() => play(), 300);
+      };
+      hooks.onError = mine((reason) => { if (!state.spotifySdkOff) onPlaybackError(reason); });
+      embeds[kind] = createSpotifySdkEngine(host, hooks, {
+        getToken: () => SP.getToken(clientId),
+        api: (path, init) => SP.api(clientId, path, init),
+      });
+    } else {
+      embeds[kind] = ENGINE_FACTORIES[kind](host, hooks);
+    }
   }
   return embeds[kind];
 }
@@ -1120,7 +1159,7 @@ function playEmbed(src) {
   e.setVolume(targetVolume());
   if (e.loadedKey === src.key) e.play();
   else e.load(src, { autoplay: true }).catch(() => { /* reported through onError */ });
-  if (src.kind === 'spotify' && !state.spotifyHinted) { state.spotifyHinted = true; toast('info', t('spotifyHint')); }
+  if (src.kind === 'spotify' && !e.sdk && !state.spotifyHinted) { state.spotifyHinted = true; toast('info', t('spotifyHint')); }
 }
 
 function toggle() {
@@ -1266,11 +1305,13 @@ function resolveList(which, chatId) {
   const items = holder.tracks;
   const s = settings();
   items.forEach((it) => { if (!it.url && !it.status) it.status = 'pending'; });
-  resolveAll(items, { youtubeKey: s.ai.youtubeKey, previews: s.ai.previews }, (i, r) => {
+  const sp = s.spotify.clientId && SP.isConnected(s.spotify.clientId) ? s.spotify.clientId : '';
+  const spotifySearch = sp ? (title, artist) => SP.searchTrack(sp, title, artist) : null;
+  resolveAll(items, { youtubeKey: s.ai.youtubeKey, previews: s.ai.previews, spotifySearch }, (i, r) => {
     const it = items[i];
     if (r) {
       it.url = r.url;
-      if (r.preview) it.preview = true;
+      if (r.preview) it.preview = true; else delete it.preview;
       if (r.art) it.art = r.art;
       it.status = 'found';
     } else it.status = 'none';
@@ -1807,6 +1848,7 @@ function render() {
   ov.dataset.view = state.view;
   ov.dataset.engine = hasSource() || state.engine !== 'audio' ? state.engine : 'audio';
   ov.toggleAttribute('data-no-volume', !CAN_FADE);
+  ov.toggleAttribute('data-spotify-sdk', !!(embeds.spotify && embeds.spotify.sdk));
 
   ov.querySelectorAll('.mmb-cover').forEach((img) => {
     const want = img.classList.contains('mmb-big-cover') || img.classList.contains('mmb-now-cover') ? ((cur && cur.art && state.source !== 'card') ? cur.art : state.avatar) : state.avatar;
@@ -2476,6 +2518,24 @@ function mountSettings() {
           <small class="mmb-set-help">Fades between two audio files. Spotify, YouTube and SoundCloud songs start after the previous one ends. iPhones don't allow fades.</small>
 
           <hr>
+          <h4 class="mmb-set-h">Spotify full songs</h4>
+          <small class="mmb-set-help">Optional. Without this, Spotify links play in Spotify's small embedded player (full songs only if you're logged in to Spotify in this browser, else 30-second previews). With it, this browser becomes a Spotify device and plays full songs with our controls and volume, and AI picks are found on Spotify. Needs Spotify Premium and a desktop browser.</small>
+          <div class="mmb-set-row mmb-set-theme-row">
+            <label for="mmb-set-spid">Client ID</label>
+            <input type="text" id="mmb-set-spid" class="text_pole" autocomplete="off" spellcheck="false" placeholder="from your app at developer.spotify.com">
+          </div>
+          <div class="mmb-set-row mmb-set-theme-row">
+            <label for="mmb-set-spredirect">Redirect URI</label>
+            <input type="text" id="mmb-set-spredirect" class="text_pole" readonly>
+            <div id="mmb-set-spcopy" class="menu_button fa-solid fa-copy" role="button" tabindex="0" title="Copy"></div>
+          </div>
+          <small id="mmb-set-spwarn" class="mmb-set-help mmb-set-warn" hidden></small>
+          <div class="mmb-set-row">
+            <button type="button" class="mmbSetBtn" id="mmb-set-spconnect">Connect Spotify</button>
+            <small id="mmb-set-spstatus" class="mmb-set-help mmb-set-testout"></small>
+          </div>
+
+          <hr>
           <h4 class="mmb-set-h">Mood music</h4>
           <div class="mmb-set-row mmb-set-theme-row">
             <label for="mmb-set-mood">Follow the story</label>
@@ -2583,6 +2643,36 @@ function mountSettings() {
   $('mmb-set-scenetoast').addEventListener('change', (e) => { s.ai.sceneToast = e.target.checked; save(); });
   $('mmb-set-previews').addEventListener('change', (e) => { s.ai.previews = e.target.checked; save(); });
   $('mmb-set-ytkey').addEventListener('change', (e) => { s.ai.youtubeKey = e.target.value.trim(); save(); });
+  $('mmb-set-spid').addEventListener('change', (e) => {
+    s.spotify.clientId = e.target.value.trim();
+    save(); state.spotifySdkOff = false; resetSpotifyEngine(); syncSettingsUI();
+  });
+  $('mmb-set-spredirect').addEventListener('focus', (e) => e.target.select());
+  $('mmb-set-spcopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(SP.redirectUri()); toast('success', 'Redirect URI copied'); }
+    catch (err) { $('mmb-set-spredirect').select(); toast('info', 'Select the address and copy it'); }
+  });
+  $('mmb-set-spconnect').addEventListener('click', async () => {
+    const out = $('mmb-set-spstatus');
+    if (SP.isConnected(s.spotify.clientId)) {
+      SP.disconnect(); resetSpotifyEngine(); syncSettingsUI();
+      out.textContent = 'Disconnected. Spotify links use the embedded player again.';
+      return;
+    }
+    s.spotify.clientId = $('mmb-set-spid').value.trim(); save();
+    out.textContent = 'Waiting for Spotify login…';
+    try {
+      await SP.connect(s.spotify.clientId);
+      state.spotifySdkOff = false;
+      resetSpotifyEngine();
+      let who = '';
+      try { const me = await SP.api(s.spotify.clientId, '/me'); who = me && (me.display_name || me.id) ? ` as ${me.display_name || me.id}` : ''; } catch (err) { /* profile is optional */ }
+      syncSettingsUI();
+      $('mmb-set-spstatus').textContent = `✓ Connected${who}. Spotify songs now play in full here.`;
+    } catch (err) {
+      out.textContent = `✗ ${err.message || err}`;
+    }
+  });
   $('mmb-set-provider').addEventListener('change', (e) => { s.ai.provider = e.target.value; save(); syncSettingsUI(); });
   $('mmb-set-profile').addEventListener('change', (e) => { s.ai.profileId = e.target.value; save(); });
   $('mmb-set-profile-refresh').addEventListener('click', () => syncSettingsUI());
@@ -2693,6 +2783,15 @@ function syncSettingsUI() {
   $('mmb-set-scenetoast').checked = !!s.ai.sceneToast;
   $('mmb-set-previews').checked = !!s.ai.previews;
   $('mmb-set-ytkey').value = s.ai.youtubeKey || '';
+  const redirect = SP.redirectUri();
+  const problem = SP.redirectProblem(redirect);
+  $('mmb-set-spid').value = s.spotify.clientId || '';
+  $('mmb-set-spredirect').value = redirect;
+  $('mmb-set-spwarn').textContent = problem;
+  $('mmb-set-spwarn').hidden = !problem;
+  const spOn = SP.isConnected(s.spotify.clientId);
+  $('mmb-set-spconnect').textContent = spOn ? 'Disconnect Spotify' : 'Connect Spotify';
+  if (spOn && !$('mmb-set-spstatus').textContent) $('mmb-set-spstatus').textContent = state.spotifySdkOff ? 'Connected, but this browser uses the embedded player.' : '✓ Connected.';
   $('mmb-set-provider').value = s.ai.provider;
   $('mmb-set-profile-box').hidden = s.ai.provider !== 'profile';
   $('mmb-set-direct-box').hidden = s.ai.provider !== 'direct';
