@@ -1,10 +1,27 @@
-# Mors's Music Box
+# Si's Music Player
 
 A floating music player for SillyTavern. Every bot carries its own playlist inside its character card, so the music travels with the bot.
 
+This is a fork of **[Mors's Music Box](https://github.com/Mors1212/mors-music-box)** by Mors, released under the same AGPL-3.0 license. Playlists are stored under the same card key, so cards made with either extension work in both. **Turn off Mors's Music Box while this one is on:** the two share the floating button.
+
+## 🆕 What this fork adds
+
+* **Spotify, YouTube and SoundCloud:** paste a song, album or playlist link and it plays in the player through the official embed.
+  * Spotify plays full songs if you're logged in to Spotify in the same browser. Otherwise it plays 30-second previews. This is Spotify's rule, not ours.
+  * Some YouTube videos (often official music videos) don't allow playing outside YouTube. They're skipped with a message. "Topic" or lyric uploads usually work.
+* **More link converters:** OneDrive (including `1drv.ms`), SharePoint, Box, GitLab, Hugging Face, Internet Archive and more Google Drive link styles, on top of Dropbox, GitHub and Drive. Links that can't play (Apple Music, Deezer, short `spotify.link` links…) are refused when you save, with the reason.
+* **Check links:** a button in the playlist editor that test-loads every link and shows its length.
+* **Player upgrades:** volume slider, crossfade (0–12 s), song lengths in the list, playlist search, seeking from the lock screen, keyboard shortcuts (Space, ←/→, Esc), and shuffle that plays every song once per round.
+* **Mood music:** tag songs with moods (calm, happy, romantic, sad, tense, action, mysterious, epic, playful, dark). The player follows the chat's mood, either from keywords (free and instant) or from the AI reading the scene.
+* **AI sidecar** (optional, uses the model you've connected in SillyTavern; nothing is added to your chat):
+  * **Discover:** the AI reads the character card and suggests a soundtrack for the bot.
+  * **Scene suggestions:** every few replies the AI names the scene and its mood and suggests a song for that moment. It can pop up as a notification.
+  * **Our Story:** a relationship playlist for you and the bot. The AI reads the chat from the start and picks songs for each chapter, along with your relationship stage ("wary allies", "slow-burn friends"…). It is saved per chat. Tap *Update* as the story moves on.
+  * **Tag moods with AI:** fills in mood tags for a whole playlist.
+  * AI picks play as 30-second previews (from iTunes) unless you add a YouTube Data API key in settings, which finds full-length versions. Tap **+** on any pick to keep it in the card's playlist.
+
 <img src="preview/09-themes.jpg" width="720">
 
-> **Note:** Music Box plays audio files from links you provide. It does not stream from YouTube, Spotify or SoundCloud.
 
 ## ✨ Features
 
@@ -36,11 +53,11 @@ A floating music player for SillyTavern. Every bot carries its own playlist insi
 2. Go to **Extensions → Install extension**.
 3. Paste this link and click **Install**:
    ```
-   https://github.com/Mors1212/mors-music-box
+   https://github.com/howardsierra/si-s-music-player
    ```
 4. Reload the page. The ♪ button appears in the bottom-right corner.
 
-To update later: **Extensions → Manage extensions → Update** next to Mors's Music Box.
+To update later: **Extensions → Manage extensions → Update** next to Si's Music Player.
 
 ## 🎵 Adding Songs
 
@@ -60,11 +77,12 @@ To update later: **Extensions → Manage extensions → Update** next to Mors's 
 
 ### Which links work?
 
-The link must open the audio file directly (mp3, ogg, m4a or wav).
-
 | Works | Converted for you | Doesn't work |
 |---|---|---|
-| Catbox (`files.catbox.moe/…`) · GitHub raw · jsDelivr · OpenDrive | Dropbox share links · GitHub `/blob/` links · Google Drive `/file/d/…` links | YouTube · Spotify · SoundCloud · any page that isn't the file itself |
+| Direct audio files (mp3, ogg, m4a, wav) · Catbox · GitHub raw · jsDelivr · OpenDrive | Dropbox · GitHub, GitLab and Hugging Face `/blob/` links · Google Drive · OneDrive / `1drv.ms` · SharePoint · Box `/s/` · Internet Archive `/details/` | Apple Music · Deezer · Tidal · Bandcamp pages · MediaFire · short `spotify.link` / `on.soundcloud.com` links · any web page that isn't the file |
+| **Spotify** songs, albums, playlists, podcasts · **YouTube** and YouTube Music videos · **SoundCloud** tracks and sets | | |
+
+Tap **Check links** in the editor to test them all before saving.
 
 Tip: smaller files (for example 128 kbps MP3) start faster on mobile data.
 
@@ -89,7 +107,7 @@ If you choose an imported theme as a card's theme, the theme is saved into the c
 
 ## ⚙️ Settings
 
-Find these under **Extensions → Mors's Music Box**.
+Find these under **Extensions → Si's Music Player**.
 
 <img src="preview/07-settings-panel.jpg" width="260"> <img src="preview/08-theme-editor.jpg" width="260">
 
@@ -104,14 +122,45 @@ Find these under **Extensions → Mors's Music Box**.
 | 📥 / 📤 | Import a theme file / export the selected theme. |
 | 💀 | Delete the selected theme. |
 | **Reset Position** | Moves the floating button back to the corner. |
+| **Crossfade** | Fades between two audio files. Streaming songs start after the previous one ends. |
+| **Mood music → Follow the story** | Off, Keywords (free), or AI reads the scene. |
+| **Change song as soon as the mood changes** | Off = the mood is used at the next song change. |
+| **Let the AI suggest music** | Turns on the AI sidecar (Discover, Our Story, scene suggestions). |
+| **Read the scene every N replies** | How often the AI reads the scene. Each read is one extra request to your model. |
+| **Pop up a song idea when the scene changes** | Shows the suggestion as a notification. Tap it to open Discover. |
+| **Play AI picks as 30-second previews** | Uses iTunes previews when no full version is found. |
+| **YouTube API key** | Optional. Lets AI picks play as full songs from YouTube. |
 
 The built-in themes can't be edited or deleted. Tap ➕ to make your own version instead.
 
 ## ❓ Troubleshooting
 
 * **A song won't play:** the link probably isn't a direct file link. Open it in your browser; it should start playing or downloading the audio, not show a web page.
+* **Spotify only plays 30 seconds:** log in at open.spotify.com in the same browser. Some phone browsers block that login inside embeds, so you may get previews there anyway.
+* **A YouTube song is skipped:** its owner doesn't allow playing outside YouTube. Try a "Topic" or lyric upload of the same song.
+* **The AI says it couldn't use the answer:** small models sometimes don't reply with a proper list. Try again, or use a stronger model.
 * **Autoplay doesn't start:** browsers block sound until you interact with the page. Tap ▶ once.
 * **The floating button is missing:** make sure **Enable Music Box** is on, then tap **Reset Position**.
 * **The pencil button is hidden:** the playlist editor only works in a one-on-one chat with a bot.
 
 
+
+## 🧪 Development
+
+No build step: SillyTavern loads `index.js` (an ES module) and the files in `src/` directly.
+
+* `src/sources.js`: link detection and share-link conversion
+* `src/mood.js`: mood tags and the keyword mood reader
+* `src/ai.js`: AI prompts and reading the AI's JSON answers
+* `src/resolve.js`: turning AI picks into playable links
+* `src/engines.js`: Spotify, YouTube and SoundCloud players behind one interface
+
+Run the unit tests with Node 18+:
+
+```bash
+npm test
+```
+
+## 📜 License and credits
+
+AGPL-3.0, the same as the original. Based on [Mors's Music Box](https://github.com/Mors1212/mors-music-box) by [Mors](https://bio.site/deMors). Its player design, themes, theme guide and playlist editor come from that project.

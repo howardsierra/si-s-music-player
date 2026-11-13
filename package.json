@@ -1,0 +1,10 @@
+{
+  "name": "si-s-music-player",
+  "private": true,
+  "description": "Si's Music Player, a SillyTavern extension (fork of Mors's Music Box). No build step: SillyTavern loads index.js directly. This file only exists for the tests.",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

@@ -1,12 +1,12 @@
 {
-  "display_name": "Mors's Music Box",
+  "display_name": "Si's Music Player",
   "loading_order": 110,
   "requires": [],
   "optional": [],
   "js": "index.js",
   "css": "style.css",
-  "author": "Mors",
-  "version": "1.0.0",
-  "homePage": "https://github.com/Mors1212/mors-music-box",
-  "description": "A floating music player that plays each bot's own playlist, stored inside the character card. Switchable themes."
+  "author": "Si (fork of Mors's Music Box by Mors)",
+  "version": "2.0.0",
+  "homePage": "https://github.com/howardsierra/si-s-music-player",
+  "description": "A floating music player with a playlist inside each character card. Plays audio files, Spotify, YouTube and SoundCloud. Mood music that follows the story, and an AI sidecar that suggests a soundtrack, songs for each scene, and a playlist of your relationship with the character."
 }
