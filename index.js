@@ -1335,9 +1335,7 @@ async function aiSoundtrack() {
   try {
     const existing = state.card.tracks.map(songLine).concat(listItems('discover').map(songLine));
     const p = AI.soundtrackPrompt(AI.cardDigest(char, c.name1), 10, existing);
-    const reply = await AI.callLLM(c, Object.assign({ responseLength: 900 }, p), settings().ai);
-    const tracks = AI.parseSoundtrack(reply);
-    if (!tracks.length) throw new Error(t('aiNoJson'));
+    const { result: tracks } = await AI.askJson(c, Object.assign({ responseLength: 1600 }, p), settings().ai, (r) => { const x = AI.parseSoundtrack(r); return x.length ? x : null; });
     if (chatId !== currentChatId()) return;
     const old = state.meta.discover ? state.meta.discover.tracks : [];
     state.meta.discover = { tracks: tracks.concat(old).slice(0, 40), at: Date.now() };
@@ -1359,9 +1357,7 @@ async function aiStory() {
   setBusy('story');
   try {
     const p = AI.storyPrompt(char.name, c.name1 || 'User', AI.cardDigest(char, c.name1, 1800), arc, 8);
-    const reply = await AI.callLLM(c, Object.assign({ responseLength: 1000 }, p), settings().ai);
-    const story = AI.parseStory(reply);
-    if (!story) throw new Error(t('aiNoJson'));
+    const { result: story } = await AI.askJson(c, Object.assign({ responseLength: 1800 }, p), settings().ai, AI.parseStory);
     if (chatId !== currentChatId()) return;
     // keep links already found for songs that stay in the story
     const prevItems = listItems('story');
@@ -1391,8 +1387,7 @@ async function aiScene() {
   state.busy = 'scene';
   try {
     const p = AI.scenePrompt(char.name, recent, playlist, state.meta.scene && state.meta.scene.scene);
-    const reply = await AI.callLLM(c, Object.assign({ responseLength: 350 }, p), settings().ai);
-    const res = AI.parseScene(reply, playlist.length);
+    const { result: res } = await AI.askJson(c, Object.assign({ responseLength: 800 }, p), settings().ai, (r) => AI.parseScene(r, playlist.length));
     if (!res || chatId !== currentChatId()) return;
     state.meta.scene = { scene: res.scene, mood: res.mood, at: Date.now() };
     if (res.song) {
@@ -1451,8 +1446,8 @@ async function aiTagMoods(draft) {
   const list = draft.filter((x) => x.title || x.url);
   if (!list.length) return null;
   const p = AI.moodTagPrompt(draft.map((x) => ({ title: x.title || titleFromUrl(x.url), artist: x.artist })));
-  const reply = await AI.callLLM(ctx(), Object.assign({ responseLength: 600 }, p), settings().ai);
-  return AI.parseMoodTags(reply, draft.length);
+  const { result } = await AI.askJson(ctx(), Object.assign({ responseLength: 1000 }, p), settings().ai, (r) => { const x = AI.parseMoodTags(r, draft.length); return Object.keys(x).length ? x : null; });
+  return result;
 }
 
 /** Copy an AI pick into the card's own playlist. */
@@ -2698,16 +2693,36 @@ function mountSettings() {
       toast('error', `Couldn't load models: ${explainFetchError(err, cfg)}`);
     }
   });
-  $('mmb-set-aitest').addEventListener('click', async () => {
+  $('mmb-set-aitest').addEventListener('click', async (ev) => {
     const out = $('mmb-set-aitest-out');
+    const btn = ev.currentTarget;
+    if (btn.disabled) return;
+    btn.disabled = true;
     out.textContent = 'Asking…';
     const t0 = Date.now();
     try {
-      const reply = await AI.callLLM(ctx(), { system: 'Reply with JSON only.', prompt: 'Name one real, well-known song. Reply as {"title":"","artist":""}', responseLength: 60 }, s.ai);
-      const j = AI.extractJson(reply);
-      out.textContent = j && j.title ? `✓ ${((Date.now() - t0) / 1000).toFixed(1)} s: “${j.title}” by ${j.artist || '?'}` : `Replied, but not with JSON: ${String(reply).slice(0, 80)}`;
+      const parse = (r) => { const j = AI.extractJson(r); return j && j.title ? j : null; };
+      const req = { system: 'You name songs. Reply with JSON only.', prompt: 'Name one real, well-known song. Reply as {"title":"","artist":""}', shape: '{"title":"","artist":""}', responseLength: 400 };
+      const first = await AI.callLLM(ctx(), req, s.ai);
+      const secs = () => ((Date.now() - t0) / 1000).toFixed(1);
+      const j = parse(first);
+      if (j) out.textContent = `✓ ${secs()} s: “${j.title}” by ${j.artist || '?'}`;
+      else {
+        // show what came back, then see whether the automatic second try rescues it
+        console.warn('[si-music-player] test reply:', first);
+        try {
+          const { result } = await AI.askJson(ctx(), req, s.ai, parse);
+          out.textContent = `✓ ${secs()} s: “${result.title}” by ${result.artist || '?'} (needed a second try; first answer: ${AI.snippet(first, 100)})`;
+        } catch (e2) {
+          const hint = !AI.stripThinking(first) ? ' The model sent back nothing usable: reasoning models can spend the whole budget thinking. Try a non-reasoning model, or raise the response length in your preset.'
+            : ' The model answered, but not as JSON. If this is "Same as the chat", your roleplay preset may be overriding the instructions: use a Connection Profile without a preset, or a Direct API model.';
+          out.textContent = `✗ ${AI.snippet(first, 200)}${hint}`;
+        }
+      }
     } catch (err) {
       out.textContent = `✗ ${err.message || err}`;
+    } finally {
+      btn.disabled = false;
     }
   });
   $('mmb-set-resetpos').addEventListener('click', resetButtonPosition);
