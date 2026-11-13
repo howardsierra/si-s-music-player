@@ -12,6 +12,7 @@ import { MOODS, MOOD_EMOJI, normalizeMoods, detectMood, pickTrackForMood, tracks
 import * as AI from './src/ai.js';
 import { resolveAll } from './src/resolve.js';
 import { ENGINE_FACTORIES } from './src/engines.js';
+import { DIRECT_PRESETS, buildModelsRequest, parseModels, explainFetchError } from './src/providers.js';
 
 const MODULE = 'si-music-player';
 const LEGACY_MODULE = 'mors-music-box'; // settings are copied over from Mors's Music Box on first run
@@ -95,6 +96,9 @@ const DEFAULTS = {
     sceneToast: true, // pop up a song idea when the scene changes
     previews: true, // fill AI picks with 30-second iTunes previews when nothing better is found
     youtubeKey: '', // optional YouTube Data API key -> full-length AI picks
+    provider: 'st', // st = the chat's model | profile = a SillyTavern Connection Profile | direct = call an API from the browser
+    profileId: '',
+    direct: { preset: 'openrouter', format: 'openai', baseUrl: 'https://openrouter.ai/api/v1', apiKey: '', model: 'openai/gpt-4o-mini' },
   },
 };
 
@@ -413,6 +417,8 @@ function settings() {
       Object.keys(DEFAULTS[k]).forEach((kk) => { if (s[k][kk] === undefined) s[k][kk] = clone(DEFAULTS[k][kk]); });
     }
   });
+  if (!s.ai.direct || typeof s.ai.direct !== 'object') s.ai.direct = {};
+  Object.keys(DEFAULTS.ai.direct).forEach((k) => { if (s.ai.direct[k] === undefined) s.ai.direct[k] = DEFAULTS.ai.direct[k]; });
   if (s.theme === 'gilded' || s.theme === 'cozy') s.theme = DEFAULT_THEME; // renamed / removed
   return s;
 }
@@ -1288,7 +1294,7 @@ async function aiSoundtrack() {
   try {
     const existing = state.card.tracks.map(songLine).concat(listItems('discover').map(songLine));
     const p = AI.soundtrackPrompt(AI.cardDigest(char, c.name1), 10, existing);
-    const reply = await AI.callLLM(c, Object.assign({ responseLength: 900 }, p));
+    const reply = await AI.callLLM(c, Object.assign({ responseLength: 900 }, p), settings().ai);
     const tracks = AI.parseSoundtrack(reply);
     if (!tracks.length) throw new Error(t('aiNoJson'));
     if (chatId !== currentChatId()) return;
@@ -1312,7 +1318,7 @@ async function aiStory() {
   setBusy('story');
   try {
     const p = AI.storyPrompt(char.name, c.name1 || 'User', AI.cardDigest(char, c.name1, 1800), arc, 8);
-    const reply = await AI.callLLM(c, Object.assign({ responseLength: 1000 }, p));
+    const reply = await AI.callLLM(c, Object.assign({ responseLength: 1000 }, p), settings().ai);
     const story = AI.parseStory(reply);
     if (!story) throw new Error(t('aiNoJson'));
     if (chatId !== currentChatId()) return;
@@ -1344,7 +1350,7 @@ async function aiScene() {
   state.busy = 'scene';
   try {
     const p = AI.scenePrompt(char.name, recent, playlist, state.meta.scene && state.meta.scene.scene);
-    const reply = await AI.callLLM(c, Object.assign({ responseLength: 350 }, p));
+    const reply = await AI.callLLM(c, Object.assign({ responseLength: 350 }, p), settings().ai);
     const res = AI.parseScene(reply, playlist.length);
     if (!res || chatId !== currentChatId()) return;
     state.meta.scene = { scene: res.scene, mood: res.mood, at: Date.now() };
@@ -1404,7 +1410,7 @@ async function aiTagMoods(draft) {
   const list = draft.filter((x) => x.title || x.url);
   if (!list.length) return null;
   const p = AI.moodTagPrompt(draft.map((x) => ({ title: x.title || titleFromUrl(x.url), artist: x.artist })));
-  const reply = await AI.callLLM(ctx(), Object.assign({ responseLength: 600 }, p));
+  const reply = await AI.callLLM(ctx(), Object.assign({ responseLength: 600 }, p), settings().ai);
   return AI.parseMoodTags(reply, draft.length);
 }
 
@@ -2485,7 +2491,56 @@ function mountSettings() {
           <hr>
           <h4 class="mmb-set-h">AI sidecar</h4>
           <label class="checkbox_label" for="mmb-set-ai"><input type="checkbox" id="mmb-set-ai"> <span>Let the AI suggest music</span></label>
-          <small class="mmb-set-help">Uses the model you have connected in SillyTavern. Each suggestion is one extra request; nothing is added to your chat.</small>
+          <small class="mmb-set-help">Each suggestion is one extra request to the model you pick below; nothing is added to your chat.</small>
+          <div class="mmb-set-row mmb-set-theme-row">
+            <label for="mmb-set-provider">AI model</label>
+            <select id="mmb-set-provider" class="text_pole">
+              <option value="st">Same as the chat</option>
+              <option value="profile">A Connection Profile</option>
+              <option value="direct">Direct API</option>
+            </select>
+          </div>
+          <div id="mmb-set-profile-box" class="mmb-set-sub">
+            <div class="mmb-set-row mmb-set-theme-row">
+              <label for="mmb-set-profile">Profile</label>
+              <select id="mmb-set-profile" class="text_pole"></select>
+              <div id="mmb-set-profile-refresh" class="menu_button fa-solid fa-rotate" role="button" tabindex="0" title="Reload profiles"></div>
+            </div>
+            <small class="mmb-set-help">Use any provider and model SillyTavern supports, without changing your chat model. Make a profile in the Connection Manager (the plug icon at the top: set the API and model, then save a profile). Your API key stays in SillyTavern. Recommended.</small>
+          </div>
+          <div id="mmb-set-direct-box" class="mmb-set-sub">
+            <div class="mmb-set-row mmb-set-theme-row">
+              <label for="mmb-set-dpreset">Provider</label>
+              <select id="mmb-set-dpreset" class="text_pole">${Object.keys(DIRECT_PRESETS).map((k) => `<option value="${k}">${esc(DIRECT_PRESETS[k].label)}</option>`).join('')}</select>
+            </div>
+            <div class="mmb-set-row mmb-set-theme-row" id="mmb-set-dformat-row">
+              <label for="mmb-set-dformat">API type</label>
+              <select id="mmb-set-dformat" class="text_pole">
+                <option value="openai">OpenAI-compatible</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Google Gemini</option>
+              </select>
+            </div>
+            <div class="mmb-set-row mmb-set-theme-row">
+              <label for="mmb-set-durl">Address</label>
+              <input type="url" id="mmb-set-durl" class="text_pole" autocomplete="off" placeholder="https://…/v1">
+            </div>
+            <div class="mmb-set-row mmb-set-theme-row">
+              <label for="mmb-set-dkey">API key</label>
+              <input type="password" id="mmb-set-dkey" class="text_pole" autocomplete="off" placeholder="not needed for local servers">
+            </div>
+            <div class="mmb-set-row mmb-set-theme-row">
+              <label for="mmb-set-dmodel">Model</label>
+              <input type="text" id="mmb-set-dmodel" class="text_pole" autocomplete="off" list="mmb-set-dmodels">
+              <datalist id="mmb-set-dmodels"></datalist>
+              <div id="mmb-set-dload" class="menu_button fa-solid fa-list" role="button" tabindex="0" title="Load the model list"></div>
+            </div>
+            <small class="mmb-set-help">Your browser calls the API itself, and the key is saved in plain text in your SillyTavern settings. Some APIs refuse calls from web pages; if yours does, use a Connection Profile.</small>
+          </div>
+          <div class="mmb-set-row">
+            <button type="button" class="mmbSetBtn" id="mmb-set-aitest">Test the AI model</button>
+            <small id="mmb-set-aitest-out" class="mmb-set-help mmb-set-testout"></small>
+          </div>
           <div class="mmb-set-row mmb-set-theme-row">
             <label for="mmb-set-every">Read the scene every</label>
             <input type="number" id="mmb-set-every" class="text_pole mmb-set-num" min="0" max="50" step="1">
@@ -2528,6 +2583,43 @@ function mountSettings() {
   $('mmb-set-scenetoast').addEventListener('change', (e) => { s.ai.sceneToast = e.target.checked; save(); });
   $('mmb-set-previews').addEventListener('change', (e) => { s.ai.previews = e.target.checked; save(); });
   $('mmb-set-ytkey').addEventListener('change', (e) => { s.ai.youtubeKey = e.target.value.trim(); save(); });
+  $('mmb-set-provider').addEventListener('change', (e) => { s.ai.provider = e.target.value; save(); syncSettingsUI(); });
+  $('mmb-set-profile').addEventListener('change', (e) => { s.ai.profileId = e.target.value; save(); });
+  $('mmb-set-profile-refresh').addEventListener('click', () => syncSettingsUI());
+  $('mmb-set-dpreset').addEventListener('change', (e) => {
+    const pr = DIRECT_PRESETS[e.target.value] || DIRECT_PRESETS.custom;
+    Object.assign(s.ai.direct, { preset: e.target.value, format: pr.format, baseUrl: pr.baseUrl || s.ai.direct.baseUrl, model: pr.model });
+    save(); syncSettingsUI();
+  });
+  $('mmb-set-dformat').addEventListener('change', (e) => { s.ai.direct.format = e.target.value; save(); });
+  $('mmb-set-durl').addEventListener('change', (e) => { s.ai.direct.baseUrl = e.target.value.trim(); save(); });
+  $('mmb-set-dkey').addEventListener('change', (e) => { s.ai.direct.apiKey = e.target.value.trim(); save(); });
+  $('mmb-set-dmodel').addEventListener('change', (e) => { s.ai.direct.model = e.target.value.trim(); save(); });
+  $('mmb-set-dload').addEventListener('click', async () => {
+    const cfg = s.ai.direct;
+    try {
+      const { url, init } = buildModelsRequest(cfg);
+      const res = await fetch(url, init);
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const models = parseModels(cfg.format, await res.json());
+      $('mmb-set-dmodels').innerHTML = models.map((m) => `<option value="${esc(m)}">`).join('');
+      toast('success', `Found ${models.length} models. Click the Model box to pick one.`);
+    } catch (err) {
+      toast('error', `Couldn't load models: ${explainFetchError(err, cfg)}`);
+    }
+  });
+  $('mmb-set-aitest').addEventListener('click', async () => {
+    const out = $('mmb-set-aitest-out');
+    out.textContent = 'Asking…';
+    const t0 = Date.now();
+    try {
+      const reply = await AI.callLLM(ctx(), { system: 'Reply with JSON only.', prompt: 'Name one real, well-known song. Reply as {"title":"","artist":""}', responseLength: 60 }, s.ai);
+      const j = AI.extractJson(reply);
+      out.textContent = j && j.title ? `✓ ${((Date.now() - t0) / 1000).toFixed(1)} s: “${j.title}” by ${j.artist || '?'}` : `Replied, but not with JSON: ${String(reply).slice(0, 80)}`;
+    } catch (err) {
+      out.textContent = `✗ ${err.message || err}`;
+    }
+  });
   $('mmb-set-resetpos').addEventListener('click', resetButtonPosition);
   const onTap = (id, fn) => {
     const el = $(id);
@@ -2601,6 +2693,28 @@ function syncSettingsUI() {
   $('mmb-set-scenetoast').checked = !!s.ai.sceneToast;
   $('mmb-set-previews').checked = !!s.ai.previews;
   $('mmb-set-ytkey').value = s.ai.youtubeKey || '';
+  $('mmb-set-provider').value = s.ai.provider;
+  $('mmb-set-profile-box').hidden = s.ai.provider !== 'profile';
+  $('mmb-set-direct-box').hidden = s.ai.provider !== 'direct';
+  if (s.ai.provider === 'profile') {
+    let profiles = [];
+    let note = '';
+    try {
+      const svc = ctx().ConnectionManagerRequestService;
+      if (!svc) note = 'Needs a newer SillyTavern';
+      else profiles = svc.getSupportedProfiles();
+    } catch (e) { note = 'Turn on the Connection Manager extension'; }
+    const opts = profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}${p.model ? ` · ${esc(p.model)}` : ''}</option>`).join('');
+    $('mmb-set-profile').innerHTML = `<option value="">${note || (profiles.length ? 'Pick a profile…' : 'No profiles yet')}</option>${opts}`;
+    $('mmb-set-profile').value = profiles.some((p) => p.id === s.ai.profileId) ? s.ai.profileId : '';
+  }
+  const d = s.ai.direct;
+  $('mmb-set-dpreset').value = DIRECT_PRESETS[d.preset] ? d.preset : 'custom';
+  $('mmb-set-dformat').value = d.format;
+  $('mmb-set-dformat-row').hidden = d.preset !== 'custom';
+  $('mmb-set-durl').value = d.baseUrl || '';
+  $('mmb-set-dkey').value = d.apiKey || '';
+  $('mmb-set-dmodel').value = d.model || '';
 }
 
 function applyEnabled() {

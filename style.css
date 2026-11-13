@@ -936,3 +936,6 @@
 .mmb-ed-io .mmb-pill { min-width: 0; white-space: normal; text-align: center; font-size: 13px; padding: 8px 12px; }
 .mmb-tab { letter-spacing: .02em; padding: 7px 3px; font-size: 10.5px; }
 .mmb-tab.has::after { margin-left: 3px; }
+.mmb-set-sub { display: flex; flex-direction: column; gap: 8px; padding-left: 10px; border-left: 2px solid rgba(127, 127, 127, .3); }
+.mmb-set-sub[hidden], .mmb-set-row[hidden] { display: none; }
+.mmb-set-testout { margin: 0; }

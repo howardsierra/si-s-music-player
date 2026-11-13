@@ -7,6 +7,7 @@
  */
 
 import { MOODS, normalizeMoods } from './mood.js';
+import { buildDirectRequest, parseDirectResponse, explainFetchError } from './providers.js';
 
 const clip = (s, n) => {
   const str = String(s == null ? '' : s).replace(/\s+\n/g, '\n').trim();
@@ -207,15 +208,51 @@ export function parseMoodTags(text, count) {
   return out;
 }
 
+/** Reply text from whatever a SillyTavern request returned (string, or { content, reasoning }). */
+function replyText(r) {
+  if (r == null) return '';
+  if (typeof r === 'string') return r;
+  if (typeof r.content === 'string') return r.content;
+  return String(r);
+}
+
 /**
- * Ask the model connected in SillyTavern. Doesn't touch the chat.
- * Newer ST takes one options object; older ST took positional arguments
- * (an options-object function has .length 0 because of its destructured default).
+ * Ask the AI. Nothing is added to the chat.
+ * provider = settings.ai: { provider: 'st' | 'profile' | 'direct', profileId, direct: {...} }
  */
-export async function callLLM(c, { system, prompt, responseLength = 700 }) {
+export async function callLLM(c, req, provider = {}) {
+  const { system, prompt, responseLength = 700 } = req;
+  const kind = provider.provider || 'st';
+
+  if (kind === 'profile') {
+    const svc = c && c.ConnectionManagerRequestService;
+    if (!svc || typeof svc.sendRequest !== 'function') throw new Error('Connection Profiles need SillyTavern 1.12.6 or newer with the Connection Manager extension on.');
+    if (!provider.profileId) throw new Error('Pick a Connection Profile for the AI sidecar first.');
+    const messages = [{ role: 'system', content: system }, { role: 'user', content: prompt }];
+    const r = await svc.sendRequest(provider.profileId, messages, responseLength, { stream: false, extractData: true, includePreset: false, includeInstruct: true });
+    return replyText(r);
+  }
+
+  if (kind === 'direct') {
+    const cfg = provider.direct || {};
+    const { url, init } = buildDirectRequest(cfg, { system, prompt, maxTokens: responseLength });
+    let res;
+    try { res = await fetch(url, init); } catch (e) { throw new Error(explainFetchError(e, cfg)); }
+    let json = null;
+    try { json = await res.json(); } catch (e) { /* not JSON */ }
+    if (!res.ok) {
+      const why = json && json.error ? (json.error.message || json.error) : res.statusText;
+      throw new Error(`${res.status} ${why}`.trim());
+    }
+    return parseDirectResponse(cfg.format, json);
+  }
+
+  // the model connected for chatting.
+  // Newer ST takes one options object; older ST took positional arguments
+  // (an options-object function has .length 0 because of its destructured default).
   if (!c || typeof c.generateRaw !== 'function') throw new Error('This SillyTavern version has no generateRaw. Please update ST.');
   if (c.generateRaw.length === 0) {
-    return c.generateRaw({ prompt, systemPrompt: system, responseLength });
+    return replyText(await c.generateRaw({ prompt, systemPrompt: system, responseLength }));
   }
-  return c.generateRaw(prompt, null, false, false, system, responseLength);
+  return replyText(await c.generateRaw(prompt, null, false, false, system, responseLength));
 }

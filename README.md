@@ -13,7 +13,7 @@ This is a fork of **[Mors's Music Box](https://github.com/Mors1212/mors-music-bo
 * **Check links:** a button in the playlist editor that test-loads every link and shows its length.
 * **Player upgrades:** volume slider, crossfade (0–12 s), song lengths in the list, playlist search, seeking from the lock screen, keyboard shortcuts (Space, ←/→, Esc), and shuffle that plays every song once per round.
 * **Mood music:** tag songs with moods (calm, happy, romantic, sad, tense, action, mysterious, epic, playful, dark). The player follows the chat's mood, either from keywords (free and instant) or from the AI reading the scene.
-* **AI sidecar** (optional, uses the model you've connected in SillyTavern; nothing is added to your chat):
+* **AI sidecar** (optional; nothing is added to your chat). It can use your chat model, a different provider and model through a SillyTavern **Connection Profile**, or an API called directly (see [AI model](#-ai-model)):
   * **Discover:** the AI reads the character card and suggests a soundtrack for the bot.
   * **Scene suggestions:** every few replies the AI names the scene and its mood and suggests a song for that moment. It can pop up as a notification.
   * **Our Story:** a relationship playlist for you and the bot. The AI reads the chat from the start and picks songs for each chapter, along with your relationship stage ("wary allies", "slow-burn friends"…). It is saved per chat. Tap *Update* as the story moves on.
@@ -126,12 +126,26 @@ Find these under **Extensions → Si's Music Player**.
 | **Mood music → Follow the story** | Off, Keywords (free), or AI reads the scene. |
 | **Change song as soon as the mood changes** | Off = the mood is used at the next song change. |
 | **Let the AI suggest music** | Turns on the AI sidecar (Discover, Our Story, scene suggestions). |
+| **AI model** | Same as the chat, a Connection Profile, or a direct API. See below. |
+| **Test the AI model** | Sends one tiny request and shows the answer, or why it failed. |
 | **Read the scene every N replies** | How often the AI reads the scene. Each read is one extra request to your model. |
 | **Pop up a song idea when the scene changes** | Shows the suggestion as a notification. Tap it to open Discover. |
 | **Play AI picks as 30-second previews** | Uses iTunes previews when no full version is found. |
 | **YouTube API key** | Optional. Lets AI picks play as full songs from YouTube. |
 
 The built-in themes can't be edited or deleted. Tap ➕ to make your own version instead.
+
+## 🤖 AI model
+
+The AI sidecar doesn't have to use the model you chat with. Under **Extensions → Si's Music Player → AI model**:
+
+| Option | How it works |
+|---|---|
+| **Same as the chat** | Uses whatever is connected for chatting. |
+| **A Connection Profile** *(recommended)* | Any provider and model SillyTavern supports, e.g. a cheap fast model for music while you chat with a big one. Make a profile with SillyTavern's Connection Manager (plug icon: choose the API and model, then save a profile), then pick it here. Requests go through SillyTavern, so your API key stays in its secret store. Needs SillyTavern 1.12.6 or newer. |
+| **Direct API** | The browser calls the API itself. Presets for OpenRouter, OpenAI, Anthropic, Google Gemini, Groq, DeepSeek, Mistral, Ollama and LM Studio, or any other OpenAI-compatible address. The list button loads the provider's models. The key is saved in plain text in your SillyTavern settings, and some APIs refuse calls from web pages. For Ollama, start it with `OLLAMA_ORIGINS=*`; for LM Studio, turn on CORS. |
+
+Small, fast models are fine for this. The sidecar only needs a short list of songs as JSON.
 
 ## ❓ Troubleshooting
 
@@ -152,6 +166,7 @@ No build step: SillyTavern loads `index.js` (an ES module) and the files in `src
 * `src/sources.js`: link detection and share-link conversion
 * `src/mood.js`: mood tags and the keyword mood reader
 * `src/ai.js`: AI prompts and reading the AI's JSON answers
+* `src/providers.js`: which AI model the sidecar calls (Connection Profile or direct API)
 * `src/resolve.js`: turning AI picks into playable links
 * `src/engines.js`: Spotify, YouTube and SoundCloud players behind one interface
 
