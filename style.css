@@ -953,3 +953,9 @@
 .mmb-set-pick[hidden] { display: none; }
 .mmb-set-pick select { width: 100%; height: auto; min-height: 8em; }
 .mmb-set-pick input[hidden] { display: none; }
+.mmb-scene { gap: 4px; }
+.mmb-scene.bad { box-shadow: inset 0 0 0 1px #c2504f; }
+.mmb-scene-status { font-style: normal; font-size: 11px; color: var(--mmb-soft); }
+.mmb-scene.bad .mmb-scene-status { color: #c2504f; }
+.mmb-scene-now { margin-top: 4px; cursor: pointer; color: var(--mmb-accent); border-color: currentColor; }
+.mmb-scene-now svg { width: 12px; height: 12px; }

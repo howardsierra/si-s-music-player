@@ -289,6 +289,13 @@ Object.assign(I18N.en, {
   moodHint: 'Mood music picks songs by their mood tags. Tag a few songs, then choose a mood mode in Extensions → Si\'s Music Player.',
   spotifyHint: 'Log in to Spotify in this browser to hear full songs. Otherwise Spotify plays 30-second previews.',
   volume: 'Volume',
+  sceneNow: 'Read the scene now',
+  sceneReading: 'Reading the scene…',
+  sceneNext: 'Next scene check in {n} replies',
+  sceneNextOne: 'Next scene check after the next reply',
+  sceneAutoOff: 'Automatic scene checks are off (Extensions → Si\'s Music Player)',
+  sceneFailed: "Couldn't read the scene: {err}",
+  sceneFailedShort: 'Last check failed: {err}',
 });
 Object.assign(I18N.th, {
   cantPlayWhy: 'เล่น {title} ไม่ได้: {reason}',
@@ -333,6 +340,13 @@ Object.assign(I18N.th, {
   moodHint: 'เพลงตามอารมณ์จะเลือกเพลงจากแท็กอารมณ์ ใส่แท็กให้เพลงสักสองสามเพลง แล้วเลือกโหมดใน Extensions → Si\'s Music Player',
   spotifyHint: 'ล็อกอิน Spotify ในเบราว์เซอร์นี้เพื่อฟังเพลงเต็ม ไม่งั้น Spotify จะเล่นตัวอย่าง 30 วินาที',
   volume: 'ความดัง',
+  sceneNow: 'อ่านฉากตอนนี้',
+  sceneReading: 'กำลังอ่านฉาก…',
+  sceneNext: 'อ่านฉากอีกครั้งในอีก {n} ข้อความ',
+  sceneNextOne: 'อ่านฉากหลังข้อความถัดไป',
+  sceneAutoOff: 'ปิดการอ่านฉากอัตโนมัติอยู่ (Extensions → Si\'s Music Player)',
+  sceneFailed: 'อ่านฉากไม่สำเร็จ: {err}',
+  sceneFailedShort: 'ครั้งล่าสุดไม่สำเร็จ: {err}',
 });
 
 /* ---------- state ---------- */
@@ -363,7 +377,8 @@ const state = {
   moodWhy: '',
   lastMoodSwitch: 0,
   replies: 0,
-  scenePending: false,
+  sceneStatus: null, // last scene read: { at, ok, msg }
+  sceneErrorShown: false,
   busy: '',         // which AI task is running
   posStateAt: 0,
 };
@@ -793,7 +808,7 @@ function syncWithChat() {
   state.chatId = chatId;
 
   if (sameChar) {
-    if (!sameChat) { state.replies = 0; state.moodNow = null; if (state.source !== 'card') { stop(); setSource('card'); } }
+    if (!sameChat) { state.replies = 0; state.moodNow = null; state.sceneStatus = null; state.sceneErrorShown = false; if (state.source !== 'card') { stop(); setSource('card'); } }
     refreshQueue();
     if (state.index < 0 && state.tracks.length) state.index = 0;
   } else {
@@ -808,6 +823,8 @@ function syncWithChat() {
     state.bag = null;
     state.replies = 0;
     state.moodNow = null;
+    state.sceneStatus = null;
+    state.sceneErrorShown = false;
     state.view = 'list';
     if (settings().autoplay && settings().enabled && card.tracks.length) {
       play(settings().shuffle ? Math.floor(Math.random() * card.tracks.length) : 0);
@@ -1375,21 +1392,36 @@ async function aiStory() {
   } finally { setBusy(''); }
 }
 
-/** Read the latest messages: name the scene + mood, suggest a song. Runs quietly in the background. */
-async function aiScene() {
-  if (!aiReady(true) || state.busy) return;
+/**
+ * Read the latest messages: name the scene + mood, suggest a song.
+ * manual = the "Read the scene now" button (shows every outcome); otherwise it runs in the background
+ * every N replies and only pops up when the scene changes.
+ */
+async function aiScene(manual) {
+  const s = settings();
+  if (!s.ai.enabled || !currentChar()) { if (manual) aiReady(); return; }
+  if (state.busy) {
+    // another AI task is running: try again shortly instead of silently skipping this scene
+    if (!manual) setTimeout(() => aiScene(false), 4000);
+    return;
+  }
   const c = ctx();
   const char = currentChar();
   const chatId = currentChatId();
   const recent = AI.recentChat(c.chat, 6);
-  if (!recent) return;
+  if (!recent) { if (manual) toast('info', t('needChat')); return; }
   const playlist = state.source === 'card' ? state.card.tracks.slice(0, 40) : [];
-  state.busy = 'scene';
+  const first = !state.meta.scene;
+  const prevMood = state.meta.scene && state.meta.scene.mood;
+  setBusy('scene');
+  state.sceneStatus = { at: Date.now(), ok: null, msg: t('aiThinking') };
+  renderList();
   try {
     const p = AI.scenePrompt(char.name, recent, playlist, state.meta.scene && state.meta.scene.scene);
-    const { result: res } = await AI.askJson(c, Object.assign({ responseLength: 800 }, p), settings().ai, (r) => AI.parseScene(r, playlist.length));
-    if (!res || chatId !== currentChatId()) return;
+    const { result: res } = await AI.askJson(c, Object.assign({ responseLength: 800 }, p), s.ai, (r) => AI.parseScene(r, playlist.length));
+    if (chatId !== currentChatId()) return;
     state.meta.scene = { scene: res.scene, mood: res.mood, at: Date.now() };
+    state.sceneStatus = { at: Date.now(), ok: true, msg: '' };
     if (res.song) {
       res.song.chapter = res.scene ? `${t('scene')}: ${res.scene}` : t('scene');
       const old = state.meta.discover ? state.meta.discover.tracks : [];
@@ -1399,23 +1431,61 @@ async function aiScene() {
       resolveList('discover', chatId);
     }
     saveMeta(chatId);
-    if (settings().mood.mode === 'ai' && res.mood) setMood(res.mood, res.scene, { pick: res.pick });
-    if (settings().ai.sceneToast && res.changed) {
+    if (s.mood.mode === 'ai' && res.mood) setMood(res.mood, res.scene, { pick: res.pick });
+    // pop up on the first read of a chat, when the scene or its mood changed, or when asked by hand
+    const worthSaying = manual || first || res.changed || (res.mood && res.mood !== prevMood);
+    if ((s.ai.sceneToast || manual) && worthSaying) {
       const msg = res.song
         ? t('sceneToast', { scene: res.scene || '…', title: res.song.title, artist: res.song.artist || '?' })
         : t('sceneToastNoSong', { scene: res.scene || '…', mood: res.mood || '?' });
       toast('info', msg, { onclick: () => { togglePanel(true); setTab('discover'); }, timeOut: 9000 });
     }
-    render();
   } catch (e) {
     console.warn(`[${MODULE}] scene`, e);
-  } finally { if (state.busy === 'scene') state.busy = ''; }
+    state.sceneStatus = { at: Date.now(), ok: false, msg: String((e && e.message) || e) };
+    // say so once per chat (and every time when asked by hand), so a broken setup isn't invisible
+    if (manual || !state.sceneErrorShown) {
+      state.sceneErrorShown = true;
+      toast('warning', t('sceneFailed', { err: state.sceneStatus.msg }), { timeOut: 12000 });
+    }
+  } finally {
+    if (state.busy === 'scene') setBusy('');
+    else render();
+  }
 }
 
-/** A character replied. Keyword moods react right away; the AI scene reader runs every N replies. */
-function onCharacterReply() {
+/** SillyTavern shows its Stop button only while it is generating a reply. */
+function stIsGenerating() {
+  const stopBtn = document.getElementById('mes_stop');
+  return !!(stopBtn && getComputedStyle(stopBtn).display !== 'none');
+}
+
+/** Run the scene reader once SillyTavern has finished replying (it may still be saving / streaming). */
+function scheduleScene(tries = 0) {
+  clearTimeout(state.sceneTimer);
+  state.sceneTimer = setTimeout(() => {
+    if (stIsGenerating() && tries < 20) { scheduleScene(tries + 1); return; }
+    aiScene(false);
+  }, tries ? 1500 : 1000);
+}
+
+/** Replies left until the next automatic scene read (null = automatic reading is off). */
+function repliesUntilScene() {
+  const s = settings();
+  const every = Number(s.ai.sceneEvery) || 0;
+  if (!s.ai.enabled || every <= 0 || !(s.mood.mode === 'ai' || s.ai.sceneToast)) return null;
+  return every - (state.replies % every);
+}
+
+/**
+ * A character replied. Keyword moods react right away; the AI scene reader runs every N replies.
+ * Note: with streaming, SillyTavern fires GENERATION_ENDED *before* MESSAGE_RECEIVED, so this
+ * schedules the read itself instead of waiting for GENERATION_ENDED.
+ */
+function onCharacterReply(messageId, type) {
   const c = ctx();
   if (!c || !currentChar() || !settings().enabled) return;
+  if (type === 'first_message' || type === 'impersonate') return; // the greeting isn't a reply
   const chat = c.chat || [];
   const last = chat[chat.length - 1];
   if (!last || last.is_user || last.is_system) return;
@@ -1427,18 +1497,11 @@ function onCharacterReply() {
     const mood = detectMood(text, { minScore: 2 });
     if (mood) setMood(mood, '');
   }
-  const every = Number(s.ai.sceneEvery) || 0;
-  if (s.ai.enabled && every > 0 && (s.mood.mode === 'ai' || s.ai.sceneToast) && state.replies % every === 0) {
-    state.scenePending = true;
-    if (!hasGenerationEndedEvent) runPendingScene();
-  }
-}
-
-let hasGenerationEndedEvent = false;
-function runPendingScene() {
-  if (!state.scenePending) return;
-  state.scenePending = false;
-  setTimeout(aiScene, 800); // let SillyTavern finish its own bookkeeping first
+  const left = repliesUntilScene();
+  if (left === null) return;
+  // the very first reply of a session also reads the scene, so you see it working right away
+  if (left === Number(s.ai.sceneEvery) || state.replies === 1) scheduleScene();
+  else renderList();
 }
 
 async function aiTagMoods(draft) {
@@ -1695,6 +1758,7 @@ function mountOverlay() {
     else if (act === 'add-card') addToCard(listItems(b.dataset.tab)[Number(b.dataset.k)]);
     else if (act === 'ai-soundtrack') aiSoundtrack();
     else if (act === 'ai-story') aiStory();
+    else if (act === 'ai-scene') aiScene(true);
     else if (act === 'clear-mood') clearMood();
     else if (act === 'shuffle') { settings().shuffle = !settings().shuffle; save(); state.nextIndex = null; state.bag = null; if (isPlaying()) schedulePreload(); render(); }
     else if (act === 'repeat') {
@@ -2006,7 +2070,7 @@ function aiHead(tab) {
   const s = settings();
   const name = esc(state.charName);
   const busy = state.busy === tab;
-  const btn = (act, label) => `<button type="button" class="mmb-pill wide mmb-ai-btn" data-act="${act}"${state.busy && state.busy !== 'scene' ? ' disabled' : ''}>${busy ? esc(t('aiThinking')) : `${ICON.sparkle} ${esc(label)}`}</button>`;
+  const btn = (act, label) => `<button type="button" class="mmb-pill wide mmb-ai-btn" data-act="${act}"${state.busy ? ' disabled' : ''}>${busy ? esc(t('aiThinking')) : `${ICON.sparkle} ${esc(label)}`}</button>`;
   const off = s.ai.enabled ? '' : `<p class="mmb-ai-note">${esc(t('aiOff'))}</p>`;
   if (tab === 'story') {
     const st = state.meta.story;
@@ -2017,7 +2081,19 @@ function aiHead(tab) {
     </div>`;
   }
   const sc = state.meta.scene;
-  const scene = sc && sc.scene ? `<div class="mmb-scene"><span class="mmb-tag">${esc(t('scene'))}</span><b>${esc(sc.scene)}</b>${sc.mood ? `<small>${MOOD_EMOJI[sc.mood] || ''} ${esc(sc.mood)}</small>` : ''}</div>` : '';
+  const st = state.sceneStatus;
+  const left = repliesUntilScene();
+  let statusLine = '';
+  if (state.busy === 'scene') statusLine = t('sceneReading');
+  else if (st && st.ok === false) statusLine = `✗ ${t('sceneFailedShort', { err: st.msg })}`;
+  else if (left !== null) statusLine = left === 1 ? t('sceneNextOne') : t('sceneNext', { n: left });
+  else if (s.ai.enabled) statusLine = t('sceneAutoOff');
+  const scene = `<div class="mmb-scene${st && st.ok === false ? ' bad' : ''}">
+      <span class="mmb-tag">${esc(t('scene'))}</span>
+      ${sc && sc.scene ? `<b>${esc(sc.scene)}</b>${sc.mood ? `<small>${MOOD_EMOJI[sc.mood] || ''} ${esc(sc.mood)}</small>` : ''}` : ''}
+      ${statusLine ? `<em class="mmb-scene-status">${esc(statusLine)}</em>` : ''}
+      ${s.ai.enabled ? `<button type="button" class="mmb-chip mmb-scene-now" data-act="ai-scene"${state.busy ? ' disabled' : ''}>${ICON.sparkle} ${esc(t('sceneNow'))}</button>` : ''}
+    </div>`;
   return `<div class="mmb-ai-head">
     ${scene}
     ${listItems('discover').length ? '' : `<p class="mmb-ai-note">${esc(t('discoverEmpty', { name }))}</p>`}
@@ -2956,10 +3032,7 @@ function boot() {
     if (ev.CHARACTER_EDITED) c.eventSource.on(ev.CHARACTER_EDITED, syncWithChat);
     if (ev.CHARACTER_DELETED) c.eventSource.on(ev.CHARACTER_DELETED, syncWithChat);
     if (ev.MESSAGE_RECEIVED) c.eventSource.on(ev.MESSAGE_RECEIVED, onCharacterReply);
-    if (ev.GENERATION_ENDED) {
-      hasGenerationEndedEvent = true;
-      c.eventSource.on(ev.GENERATION_ENDED, runPendingScene);
-    }
+
   }
   window.addEventListener('resize', clampButton);
   window.addEventListener('orientationchange', () => setTimeout(clampButton, 300));
