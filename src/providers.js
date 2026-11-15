@@ -25,7 +25,7 @@ export const DIRECT_PRESETS = {
 const trimSlash = (s) => String(s || '').trim().replace(/\/+$/, '');
 
 /** The fetch() arguments for one direct request. */
-export function buildDirectRequest(cfg, { system, prompt, maxTokens = 700 }) {
+export function buildDirectRequest(cfg, { system, prompt, maxTokens = 700, variant }) {
   const base = trimSlash(cfg.baseUrl);
   const key = String(cfg.apiKey || '').trim();
   const model = String(cfg.model || '').trim();
@@ -56,7 +56,8 @@ export function buildDirectRequest(cfg, { system, prompt, maxTokens = 700 }) {
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: system }] },
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { maxOutputTokens: maxTokens, temperature: 0.8 },
+          // Gemini's thinking counts against this limit, so leave generous room (unused tokens cost nothing)
+          generationConfig: { maxOutputTokens: Math.max(maxTokens * 3, 4096), temperature: 0.8 },
         }),
       },
     };
@@ -69,12 +70,11 @@ export function buildDirectRequest(cfg, { system, prompt, maxTokens = 700 }) {
     init: {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        temperature: 0.8,
-        messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
-      }),
+      body: JSON.stringify(Object.assign(
+        { model, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] },
+        // OpenAI's reasoning models (o-series, gpt-5…) take max_completion_tokens and no temperature
+        variant === 'reasoning' ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens, temperature: 0.8 },
+      )),
     },
   };
 }
@@ -92,8 +92,43 @@ export function parseDirectResponse(format, json) {
   }
   const msg = json.choices && json.choices[0] && (json.choices[0].message || json.choices[0]);
   const content = msg && (msg.content != null ? msg.content : msg.text);
-  if (Array.isArray(content)) return content.map((p) => (typeof p === 'string' ? p : p.text || '')).join('');
+  if (Array.isArray(content)) {
+    // some APIs split the reply into parts; keep the text, drop "thinking" / "reasoning" parts
+    return content.map((p) => {
+      if (typeof p === 'string') return p;
+      if (!p || (p.type && p.type !== 'text' && p.type !== 'output_text')) return '';
+      return typeof p.text === 'string' ? p.text : '';
+    }).join('');
+  }
   return String(content || '');
+}
+
+/** Did the reply get cut off by the token limit, and did the model spend tokens on reasoning? */
+export function directMeta(format, json) {
+  const meta = { truncated: false, reasoned: false };
+  if (!json || typeof json !== 'object') return meta;
+  if (format === 'anthropic') {
+    meta.truncated = json.stop_reason === 'max_tokens';
+    meta.reasoned = (json.content || []).some((b) => b && /thinking/.test(b.type || ''));
+  } else if (format === 'gemini') {
+    const cand = (json.candidates && json.candidates[0]) || {};
+    const parts = (cand.content && cand.content.parts) || [];
+    meta.truncated = cand.finishReason === 'MAX_TOKENS';
+    meta.reasoned = parts.some((p) => p && p.thought) || !!(json.usageMetadata && json.usageMetadata.thoughtsTokenCount > 0);
+  } else {
+    const choice = (json.choices && json.choices[0]) || {};
+    const msg = choice.message || {};
+    const details = (json.usage && json.usage.completion_tokens_details) || {};
+    meta.truncated = choice.finish_reason === 'length';
+    meta.reasoned = !!(msg.reasoning_content || msg.reasoning || msg.reasoning_details || details.reasoning_tokens > 0
+      || (Array.isArray(msg.content) && msg.content.some((p) => p && /thinking|reasoning/.test(p.type || ''))));
+  }
+  return meta;
+}
+
+/** A 400 that means "this is a reasoning model: use max_completion_tokens, and no temperature". */
+export function wantsReasoningParams(status, message) {
+  return status === 400 && /max_tokens|max_completion_tokens|temperature/i.test(String(message || ''));
 }
 
 /** Request + parse the list of model names a direct API offers. */

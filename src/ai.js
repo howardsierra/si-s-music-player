@@ -7,7 +7,7 @@
  */
 
 import { MOODS, normalizeMoods } from './mood.js';
-import { buildDirectRequest, parseDirectResponse, explainFetchError } from './providers.js';
+import { buildDirectRequest, parseDirectResponse, directMeta, wantsReasoningParams, explainFetchError } from './providers.js';
 
 const clip = (s, n) => {
   const str = String(s == null ? '' : s).replace(/\s+\n/g, '\n').trim();
@@ -127,6 +127,14 @@ export function stripThinking(text) {
   let s = String(text || '');
   s = s.replace(/<(think|thinking|reasoning|thought)>[\s\S]*?<\/\1>/gi, '');
   s = s.replace(/^[\s\S]*?<\/(think|thinking|reasoning|thought)>/i, ''); // only the closing tag survived
+  s = s.replace(/<(think|thinking|reasoning|thought)>[\s\S]*$/i, ''); // never closed: cut off while still thinking
+  // other reasoning formats some models use
+  s = s.replace(/<\|begin_of_thought\|>[\s\S]*?(<\|end_of_thought\|>|$)/gi, '').replace(/<\|(begin|end)_of_solution\|>/gi, '');
+  s = s.replace(/◁think▷[\s\S]*?(◁\/think▷|$)/g, '');
+  const final = s.lastIndexOf('<|channel|>final<|message|>'); // "harmony" format: analysis channel, then final
+  if (final > -1) s = s.slice(final + '<|channel|>final<|message|>'.length);
+  else if (/<\|channel\|>analysis<\|message\|>/.test(s)) s = ''; // only analysis, no final answer
+  s = s.replace(/<\|(end|return|start)\|>/g, '');
   return s.trim();
 }
 
@@ -156,9 +164,13 @@ export function repairTruncated(text) {
   return null;
 }
 
-/** Pull the first JSON object/array out of a model reply (thinking, code fences, chatter, trailing commas
- *  and curly quotes are tolerated; a cut-off answer keeps its complete items). */
-export function extractJson(text) {
+/**
+ * Pull JSON out of a model reply. Thinking, code fences, chatter, trailing commas and curly quotes are
+ * tolerated; a cut-off answer keeps its complete items.
+ * Without `accept`, returns the first JSON found. With `accept` (a validator), every JSON in the reply is
+ * tried, last one first, because the real answer comes after any examples a model writes while reasoning.
+ */
+export function extractJson(text, accept) {
   const raw = String(text || '');
   const s = stripThinking(raw) || raw;
   const tryParse = (str) => {
@@ -166,8 +178,8 @@ export function extractJson(text) {
     const fixed = str.replace(/,\s*([}\]])/g, '$1').replace(/[\u201C\u201D]/g, '"');
     try { return JSON.parse(fixed); } catch (e) { return undefined; }
   };
-  const fences = [...s.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map((m) => m[1]);
-  for (const f of fences) { const v = tryParse(f.trim()); if (v !== undefined) return v; }
+  const found = [];
+  [...s.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].forEach((m) => { const v = tryParse(m[1].trim()); if (v !== undefined) found.push(v); });
 
   for (let start = 0; start < s.length; start += 1) {
     const open = s[start];
@@ -189,7 +201,7 @@ export function extractJson(text) {
         if (depth === 0) {
           closed = true;
           const v = tryParse(s.slice(start, i + 1));
-          if (v !== undefined) return v;
+          if (v !== undefined) { found.push(v); start = i; } // skip what's inside it
           break;
         }
       }
@@ -198,9 +210,11 @@ export function extractJson(text) {
       // this bracket never closes: the answer was cut off. Rescue the complete part of it
       // rather than returning one of the items inside it.
       const v = repairTruncated(s.slice(start));
-      if (v != null) return v;
+      if (v != null) { found.push(v); break; }
     }
   }
+  if (!accept) return found.length ? found[0] : null;
+  for (let k = found.length - 1; k >= 0; k -= 1) { if (accept(found[k])) return found[k]; }
   return null;
 }
 
@@ -251,15 +265,18 @@ export function cleanSuggestions(list, max = 20) {
   return out.slice(0, max);
 }
 
+const songsOf = (j) => cleanSuggestions(Array.isArray(j) ? j : j && typeof j === 'object' && (j.tracks || j.songs || j.playlist));
+
 export function parseSoundtrack(text) {
-  const j = extractJson(text);
-  const list = cleanSuggestions(Array.isArray(j) ? j : j && (j.tracks || j.songs || j.playlist));
+  const list = songsOf(extractJson(text, (j) => songsOf(j).length));
   return list.length ? list : cleanSuggestions(parseLooseSongs(text));
 }
 
 export function parseScene(text, playlistLength = 0) {
-  const j = extractJson(text);
-  if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+  const isScene = (o) => o && typeof o === 'object' && !Array.isArray(o)
+    && ((typeof o.scene === 'string' && o.scene.trim()) || normalizeMoods([o.mood]).length);
+  const j = extractJson(text, isScene);
+  if (!j) return null;
   const mood = normalizeMoods([j.mood])[0] || null;
   const pick = Number.isInteger(j.pick) && j.pick >= 0 && j.pick < playlistLength ? j.pick : null;
   const song = cleanSuggestions([j.song])[0] || null;
@@ -267,8 +284,8 @@ export function parseScene(text, playlistLength = 0) {
 }
 
 export function parseStory(text) {
-  const j = extractJson(text);
-  let tracks = j && typeof j === 'object' ? cleanSuggestions(Array.isArray(j) ? j : (j.tracks || j.songs || j.playlist)) : [];
+  const j = extractJson(text, (x) => songsOf(x).length);
+  let tracks = songsOf(j);
   if (!tracks.length) tracks = cleanSuggestions(parseLooseSongs(text));
   if (!tracks.length) return null;
   const o = j && !Array.isArray(j) && typeof j === 'object' ? j : {};
@@ -276,18 +293,20 @@ export function parseStory(text) {
 }
 
 export function parseMoodTags(text, count) {
-  const j = extractJson(text);
-  const src = j && (j.moods || j);
-  const out = {};
-  if (!src || typeof src !== 'object') return out;
-  Object.keys(src).forEach((k) => {
-    const i = Number(k);
-    if (Number.isInteger(i) && i >= 0 && i < count) {
-      const m = normalizeMoods(src[k]).slice(0, 3);
-      if (m.length) out[i] = m;
-    }
-  });
-  return out;
+  const tagsOf = (j) => {
+    const src = j && (j.moods || j);
+    const out = {};
+    if (!src || typeof src !== 'object') return out;
+    Object.keys(src).forEach((k) => {
+      const i = Number(k);
+      if (Number.isInteger(i) && i >= 0 && i < count) {
+        const m = normalizeMoods(src[k]).slice(0, 3);
+        if (m.length) out[i] = m;
+      }
+    });
+    return out;
+  };
+  return tagsOf(extractJson(text, (j) => Object.keys(tagsOf(j)).length));
 }
 
 /** A short, single-line excerpt of a reply for error messages. */
@@ -316,13 +335,16 @@ export async function askJson(c, req, provider, parse) {
     }
     : Object.assign({}, req, {
       prompt: `${req.prompt}\n\nAnswer straight away with the JSON. Do not think out loud.`,
-      responseLength: Math.min(4000, (req.responseLength || 700) * 2),
+      responseLength: Math.min(8000, Math.max(3000, (req.responseLength || 700) * 3)), // room to think AND answer
     });
   const reply2 = await callLLM(c, retry, provider);
   result = parse(reply2);
   if (result) return { result, reply: reply2 };
   console.warn('[si-music-player] Second AI answer could not be read either:', reply2);
-  const err = new Error(`it did not reply with a song list. It said: ${snippet(reply2 || reply)}`);
+  const said = stripThinking(reply2) || stripThinking(reply);
+  const err = new Error(said
+    ? `it did not reply with a song list. It said: ${snippet(said)}`
+    : 'the model sent back no answer, only reasoning (or nothing). Pick a non-reasoning model for the music, or lower its reasoning effort.');
   err.reply = reply2 || reply;
   throw err;
 }
@@ -354,16 +376,34 @@ export async function callLLM(c, req, provider = {}) {
 
   if (kind === 'direct') {
     const cfg = provider.direct || {};
-    const { url, init } = buildDirectRequest(cfg, { system, prompt, maxTokens: responseLength });
-    let res;
-    try { res = await fetch(url, init); } catch (e) { throw new Error(explainFetchError(e, cfg)); }
-    let json = null;
-    try { json = await res.json(); } catch (e) { /* not JSON */ }
-    if (!res.ok) {
-      const why = json && json.error ? (json.error.message || json.error) : res.statusText;
-      throw new Error(`${res.status} ${why}`.trim());
+    const send = async (maxTokens, variant) => {
+      const { url, init } = buildDirectRequest(cfg, { system, prompt, maxTokens, variant });
+      let res;
+      try { res = await fetch(url, init); } catch (e) { throw new Error(explainFetchError(e, cfg)); }
+      let json = null;
+      try { json = await res.json(); } catch (e) { /* not JSON */ }
+      if (!res.ok) {
+        const why = json && json.error ? (json.error.message || json.error) : res.statusText;
+        const err = new Error(`${res.status} ${why}`.trim());
+        err.status = res.status;
+        throw err;
+      }
+      return { text: parseDirectResponse(cfg.format, json), meta: directMeta(cfg.format, json) };
+    };
+    let variant;
+    let out;
+    try { out = await send(responseLength, variant); } catch (e) {
+      // OpenAI's reasoning models refuse max_tokens / temperature: ask again their way
+      if (cfg.format !== 'anthropic' && cfg.format !== 'gemini' && wantsReasoningParams(e.status, e.message)) {
+        variant = 'reasoning';
+        out = await send(responseLength, variant);
+      } else throw e;
     }
-    return parseDirectResponse(cfg.format, json);
+    if (!stripThinking(out.text) && (out.meta.truncated || out.meta.reasoned)) {
+      // the model spent the whole budget reasoning and never answered: give it much more room, once
+      out = await send(Math.min(8192, Math.max(4096, responseLength * 4)), variant);
+    }
+    return out.text;
   }
 
   // the model connected for chatting.

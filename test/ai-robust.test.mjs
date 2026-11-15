@@ -62,7 +62,7 @@ test('askJson: unreadable answer is handed back to be rewritten as JSON', async 
 test('askJson: empty answer (spent on thinking) is retried with more room', async () => {
   const f = fake('<think>lots of thinking</think>', '{"tracks":[{"title":"A","artist":"B"}]}');
   await AI.askJson(f.c, { system: 's', prompt: 'p', shape: AI.SHAPES.soundtrack, responseLength: 500 }, {}, parseList);
-  assert.equal(f.calls[1].responseLength, 1000);
+  assert.equal(f.calls[1].responseLength, 3000);
   assert.match(f.calls[1].prompt, /Do not think out loud/);
 });
 
