@@ -959,3 +959,19 @@
 .mmb-scene.bad .mmb-scene-status { color: #c2504f; }
 .mmb-scene-now { margin-top: 4px; cursor: pointer; color: var(--mmb-accent); border-color: currentColor; }
 .mmb-scene-now svg { width: 12px; height: 12px; }
+
+/* SillyTavern's pop-up messages must show above the player, or errors are hidden behind it */
+#toast-container { z-index: 1000005 !important; }
+
+.mmb-ai-btn { white-space: normal; text-align: center; line-height: 1.25; max-width: 100%; }
+.mmb-ai-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #e07a79;
+  background: rgba(194, 80, 79, .12);
+  overflow-wrap: anywhere;
+  text-align: left;
+}

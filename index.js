@@ -258,7 +258,7 @@ Object.assign(I18N.en, {
   noMatch: 'No songs match',
   aiOff: 'Turn on the AI sidecar in Extensions → Si\'s Music Player to use this.',
   aiNoChar: 'Open a one-on-one chat with a bot first.',
-  genSoundtrack: 'Suggest songs for {name}',
+  genSoundtrack: 'Suggest songs',
   moreSoundtrack: 'Suggest more',
   genStory: 'Write our story as a playlist',
   updateStory: 'Update: the story moved on',
@@ -309,7 +309,7 @@ Object.assign(I18N.th, {
   noMatch: 'ไม่พบเพลงที่ตรงกัน',
   aiOff: 'เปิด AI ผู้ช่วยใน Extensions → Si\'s Music Player ก่อนนะ',
   aiNoChar: 'เปิดแชทเดี่ยวกับบอทก่อนนะ',
-  genSoundtrack: 'แนะนำเพลงสำหรับ {name}',
+  genSoundtrack: 'แนะนำเพลง',
   moreSoundtrack: 'แนะนำเพิ่ม',
   genStory: 'แต่งเรื่องของเราเป็นเพลย์ลิสต์',
   updateStory: 'อัปเดตตามเรื่องล่าสุด',
@@ -379,6 +379,7 @@ const state = {
   replies: 0,
   sceneStatus: null, // last scene read: { at, ok, msg }
   sceneErrorShown: false,
+  aiError: null, // last failed Discover / Our Story request: { tab, msg }
   busy: '',         // which AI task is running
   posStateAt: 0,
 };
@@ -808,7 +809,7 @@ function syncWithChat() {
   state.chatId = chatId;
 
   if (sameChar) {
-    if (!sameChat) { state.replies = 0; state.moodNow = null; state.sceneStatus = null; state.sceneErrorShown = false; if (state.source !== 'card') { stop(); setSource('card'); } }
+    if (!sameChat) { state.replies = 0; state.moodNow = null; state.sceneStatus = null; state.sceneErrorShown = false; state.aiError = null; if (state.source !== 'card') { stop(); setSource('card'); } }
     refreshQueue();
     if (state.index < 0 && state.tracks.length) state.index = 0;
   } else {
@@ -825,6 +826,7 @@ function syncWithChat() {
     state.moodNow = null;
     state.sceneStatus = null;
     state.sceneErrorShown = false;
+    state.aiError = null;
     state.view = 'list';
     if (settings().autoplay && settings().enabled && card.tracks.length) {
       play(settings().shuffle ? Math.floor(Math.random() * card.tracks.length) : 0);
@@ -1348,6 +1350,7 @@ async function aiSoundtrack() {
   const c = ctx();
   const char = currentChar();
   const chatId = currentChatId();
+  state.aiError = null;
   setBusy('discover');
   try {
     const existing = state.card.tracks.map(songLine).concat(listItems('discover').map(songLine));
@@ -1360,6 +1363,7 @@ async function aiSoundtrack() {
     resolveList('discover', chatId);
   } catch (e) {
     console.error(`[${MODULE}] soundtrack`, e);
+    state.aiError = { tab: 'discover', msg: String((e && e.message) || e) };
     toast('error', t('aiFailed', { err: e.message || e }));
   } finally { setBusy(''); }
 }
@@ -1371,6 +1375,7 @@ async function aiStory() {
   const chatId = currentChatId();
   const arc = AI.chatArc(c.chat);
   if (!arc || (c.chat || []).filter((m) => m && !m.is_system).length < 3) { toast('info', t('needChat')); return; }
+  state.aiError = null;
   setBusy('story');
   try {
     const p = AI.storyPrompt(char.name, c.name1 || 'User', AI.cardDigest(char, c.name1, 1800), arc, 8);
@@ -1388,6 +1393,7 @@ async function aiStory() {
     resolveList('story', chatId);
   } catch (e) {
     console.error(`[${MODULE}] story`, e);
+    state.aiError = { tab: 'story', msg: String((e && e.message) || e) };
     toast('error', t('aiFailed', { err: e.message || e }));
   } finally { setBusy(''); }
 }
@@ -2072,11 +2078,14 @@ function aiHead(tab) {
   const busy = state.busy === tab;
   const btn = (act, label) => `<button type="button" class="mmb-pill wide mmb-ai-btn" data-act="${act}"${state.busy ? ' disabled' : ''}>${busy ? esc(t('aiThinking')) : `${ICON.sparkle} ${esc(label)}`}</button>`;
   const off = s.ai.enabled ? '' : `<p class="mmb-ai-note">${esc(t('aiOff'))}</p>`;
+  const err = state.aiError && state.aiError.tab === tab && !busy
+    ? `<p class="mmb-ai-error">✗ ${esc(t('aiFailed', { err: state.aiError.msg }))}</p>` : '';
   if (tab === 'story') {
     const st = state.meta.story;
     return `<div class="mmb-ai-head">
       ${st && st.summary ? `<p class="mmb-ai-summary">${esc(st.summary)}</p>` : `<p class="mmb-ai-note">${esc(t('storyEmpty', { name: state.charName }))}</p>`}
       ${off}
+      ${err}
       ${btn('ai-story', st ? t('updateStory') : t('genStory'))}
     </div>`;
   }
@@ -2098,6 +2107,7 @@ function aiHead(tab) {
     ${scene}
     ${listItems('discover').length ? '' : `<p class="mmb-ai-note">${esc(t('discoverEmpty', { name }))}</p>`}
     ${off}
+    ${err}
     ${btn('ai-soundtrack', listItems('discover').length ? t('moreSoundtrack') : t('genSoundtrack', { name: state.charName }))}
   </div>`;
 }
